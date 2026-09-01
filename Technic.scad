@@ -1626,10 +1626,12 @@ function technic_gear_reduced_ring_interlock_positive_clip_radius( inner_diamete
  * load network rather than a crosshair or spoke graph.
  */
 function technic_gear_reduced_ring_cellular_shell_pitch() =
-    // I12 denser packing: one source collar diameter plus one source wall.
-    // This preserves >= one 4019 wall of recessed web between successive
-    // source-sized collar envelopes while packing shells more tightly.
-    ( 2 * technic_gear_reduced_ring_cell_outer_radius() )
+    // I13 golf-ball-like close packing: neighboring circular RELIEF holes
+    // retain exactly one source 4019 wall between them.  Because the positive
+    // collars keep their source outer radius, this simultaneously makes
+    // neighboring collars overlap by exactly one source wall thickness.
+    // This is the densest source-derived packing that preserves a full wall.
+    ( 2 * technic_gear_reduced_ring_cell_inner_radius() )
     + technic_gear_reduced_ring_cell_wall_thickness();
 function technic_gear_reduced_ring_cellular_overlap() =
     technic_gear_reduced_ring_cell_wall_thickness();
@@ -1639,7 +1641,7 @@ function technic_gear_reduced_ring_cellular_shell_count( inner_diameter ) =
         target = technic_gear_reduced_ring_outer_shell_radius_from_inner_diameter( inner_diameter ),
         pitch = technic_gear_reduced_ring_cellular_shell_pitch()
     )
-    target <= first + 0.0001 ? 1 : 1 + ceil( ( target - first ) / pitch );
+    target <= first + 0.0001 ? 1 : 1 + floor( ( target - first ) / pitch );
 function technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index ) =
     let(
         count = technic_gear_reduced_ring_cellular_shell_count( inner_diameter ),
@@ -1650,9 +1652,12 @@ function technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_
 function technic_gear_reduced_ring_cellular_cell_count_for_radius( shell_radius, shell_index ) =
     shell_index == 0
         ? 4
-        : 4 * ceil(
-            ( PI / 2 ) * shell_radius
-            / technic_gear_reduced_ring_cellular_shell_pitch()
+        : max(
+            4,
+            4 * floor(
+                ( PI / 2 ) * shell_radius
+                / technic_gear_reduced_ring_cellular_shell_pitch()
+            )
         );
 // Cumulative half-cell staggering.  Every scalable shell is offset from the
 // previous shell, preventing persistent radial hole rows / crosshair appearance.
@@ -1665,7 +1670,7 @@ function technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, s
                 shell_index
             );
 function technic_gear_reduced_ring_cellular_outer_radius( shell_radius, cell_count, shell_index ) =
-    // CELLULAR-I12: the full-height circular stiffener is the same physical
+    // CELLULAR-I13: the full-height circular stiffener is the same physical
     // 4019 collar at every scale.  Continuous load transfer belongs to the
     // recessed reduced web underneath, so scalable collars must not inflate
     // until they blanket the recess.
@@ -1673,7 +1678,7 @@ function technic_gear_reduced_ring_cellular_outer_radius( shell_radius, cell_cou
 function technic_gear_reduced_ring_cellular_hole_radius( shell_index, outer_radius ) =
     technic_gear_reduced_ring_cell_inner_radius();
 
-/** CELLULAR-I12 denser recessed-web + source-sized circular stiffeners.
+/** CELLULAR-I13 golf-packed recessed-web + source-sized circular stiffeners.
  *
  * Positive cellular support and negative weight relief are deliberately
  * separated.  The collar lattice is clipped to the reserved tooth-rim inner
