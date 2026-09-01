@@ -1614,6 +1614,26 @@ function _technic_gear_hollow_frame_layer_points( layer ) =
 function technic_gear_hollow_frame_joint_points( teeth ) =
 	[ for ( layer = technic_gear_hollow_frame_layers( teeth ) ) for ( p = _technic_gear_hollow_frame_layer_points( layer ) ) p ];
 
+/** True only when the terminal FRAME layer is an axis-aligned square. */
+function technic_gear_hollow_frame_terminal_is_square( teeth ) =
+	let( layers = technic_gear_hollow_frame_layers( teeth ) )
+	len( layers ) > 0 && layers[ len( layers ) - 1 ][0] == "square";
+
+/**
+ * Structural-only rim joints for a terminal square.
+ *
+ * A diamond terminal already meets the permanent cardinal CROSS at its four
+ * outer vertices. A square terminal instead ends at diagonal corners, so each
+ * corner receives one radial 45-degree member to the tooth-support rim.
+ * These four rim joints carry no secondary feature; they only close the load
+ * path from the terminal square into the rim using the normal FRAME width.
+ */
+function technic_gear_hollow_frame_square_rim_joint_points( teeth, rim_connection_radius ) =
+	technic_gear_hollow_frame_terminal_is_square( teeth )
+		? let( c = rim_connection_radius / sqrt( 2 ) )
+			[ [ c, c ], [ -c, c ], [ -c, -c ], [ c, -c ] ]
+		: [];
+
 /** Backward diagnostic name: cardinal radii of diamond layers only. */
 function technic_gear_hollow_frame_secondary_radii( teeth ) =
 	[ for ( layer = technic_gear_hollow_frame_layers( teeth ) ) if ( layer[0] == "diamond" ) layer[1] ];
@@ -1733,12 +1753,15 @@ function technic_gear_hollow_structure_nodes( teeth, hollow_structure, center, s
 		frame_joint_points = hollow_structure == "frame" ? technic_gear_hollow_frame_joint_points( teeth ) : [],
 		frame_axle_points = hollow_structure == "frame" ? technic_gear_hollow_frame_axle_points( teeth, effective_secondary ) : [],
 		frame_pin_points = hollow_structure == "frame" ? technic_gear_hollow_frame_pin_points( teeth, effective_secondary ) : [],
+		frame_rim_joint_points = hollow_structure == "frame"
+			? technic_gear_hollow_frame_square_rim_joint_points( teeth, rim_connection_radius ) : [],
 		frame_nodes = hollow_structure == "frame" ? concat(
 			[ [ 0, 0, "hub" ] ],
 			[ for ( point = frame_joint_points )
 				[ point[0], point[1],
 					_technic_gear_point_in_list( point, frame_axle_points ) ? "axle" :
-					_technic_gear_point_in_list( point, frame_pin_points ) ? "pin" : "structure" ] ]
+					_technic_gear_point_in_list( point, frame_pin_points ) ? "pin" : "structure" ] ],
+			[ for ( point = frame_rim_joint_points ) [ point[0], point[1], "structure" ] ]
 		) : [],
 		base_nodes = hollow_structure == "cross" ? [
 			[ 0, 0, "hub" ],
@@ -1804,9 +1827,17 @@ function technic_gear_hollow_structure_edges( nodes, hollow_structure, teeth = u
 		frame_layers = hollow_structure == "frame" && !is_undef( teeth ) ? technic_gear_hollow_frame_layers( teeth ) : [],
 		frame_layer_count = len( frame_layers ),
 		frame_edges = hollow_structure == "frame" && frame_layer_count > 0 ?
-			[ for ( layer = [ 0 : frame_layer_count - 1 ] )
-				for ( edge = [ [ 0,1 ], [ 1,2 ], [ 2,3 ], [ 3,0 ] ] )
-					[ 1 + 4 * layer + edge[0], 1 + 4 * layer + edge[1] ] ] : [],
+			concat(
+				[ for ( layer = [ 0 : frame_layer_count - 1 ] )
+					for ( edge = [ [ 0,1 ], [ 1,2 ], [ 2,3 ], [ 3,0 ] ] )
+						[ 1 + 4 * layer + edge[0], 1 + 4 * layer + edge[1] ] ],
+				technic_gear_hollow_frame_terminal_is_square( teeth )
+					? let(
+						outer_start = 1 + 4 * ( frame_layer_count - 1 ),
+						rim_start = 1 + 4 * frame_layer_count
+					) [ for ( i = [ 0 : 3 ] ) [ outer_start + i, rim_start + i ] ]
+					: []
+			) : [],
 		base_count = hollow_structure == "cross" ? 5 : hollow_structure == "ring" ? 9 : 0,
 		base_edges = hollow_structure == "cross" ? [
 			[ 0, 1 ], [ 0, 2 ], [ 0, 3 ], [ 0, 4 ]
