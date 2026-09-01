@@ -1688,35 +1688,47 @@ function technic_gear_reduced_ring_cellular_hole_radius( shell_index, outer_radi
         ? technic_gear_reduced_ring_cell_inner_radius()
         : technic_gear_reduced_ring_cell_outer_radius();
 
+/** CELLULAR-I9 hard tooth-rim reservation.
+ *
+ * The cellular lattice owns only the interior of the tooth-support ring.
+ * Its positive collars are clipped exactly at the ring inner boundary before
+ * they are unioned with the separately generated rim.  Cell holes therefore
+ * cannot cut or thin the tooth-support annulus, while the outer collars still
+ * meet that boundary continuously for load transfer.
+ */
 module technic_gear_reduced_ring_cellular_field_2d( inner_diameter ) {
     shell_count = technic_gear_reduced_ring_cellular_shell_count( inner_diameter );
 
-    difference() {
-        union() {
-            for ( shell_index = [ 0 : shell_count - 1 ] ) {
-                r = technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index );
-                n = technic_gear_reduced_ring_cellular_cell_count_for_radius( r, shell_index );
-                phase = technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, shell_index );
-                ro = technic_gear_reduced_ring_cellular_outer_radius( r, n, shell_index );
-                for ( index = [ 0 : n - 1 ] ) {
-                    a = phase + 360 * index / n;
-                    translate( [ r * cos( a ), r * sin( a ) ] ) circle( r = ro );
+    intersection() {
+        difference() {
+            union() {
+                for ( shell_index = [ 0 : shell_count - 1 ] ) {
+                    r = technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index );
+                    n = technic_gear_reduced_ring_cellular_cell_count_for_radius( r, shell_index );
+                    phase = technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, shell_index );
+                    ro = technic_gear_reduced_ring_cellular_outer_radius( r, n, shell_index );
+                    for ( index = [ 0 : n - 1 ] ) {
+                        a = phase + 360 * index / n;
+                        translate( [ r * cos( a ), r * sin( a ) ] ) circle( r = ro );
+                    }
+                }
+            }
+            union() {
+                for ( shell_index = [ 0 : shell_count - 1 ] ) {
+                    r = technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index );
+                    n = technic_gear_reduced_ring_cellular_cell_count_for_radius( r, shell_index );
+                    phase = technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, shell_index );
+                    ro = technic_gear_reduced_ring_cellular_outer_radius( r, n, shell_index );
+                    ri = technic_gear_reduced_ring_cellular_hole_radius( shell_index, ro );
+                    for ( index = [ 0 : n - 1 ] ) {
+                        a = phase + 360 * index / n;
+                        translate( [ r * cos( a ), r * sin( a ) ] ) circle( r = ri );
+                    }
                 }
             }
         }
-        union() {
-            for ( shell_index = [ 0 : shell_count - 1 ] ) {
-                r = technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index );
-                n = technic_gear_reduced_ring_cellular_cell_count_for_radius( r, shell_index );
-                phase = technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, shell_index );
-                ro = technic_gear_reduced_ring_cellular_outer_radius( r, n, shell_index );
-                ri = technic_gear_reduced_ring_cellular_hole_radius( shell_index, ro );
-                for ( index = [ 0 : n - 1 ] ) {
-                    a = phase + 360 * index / n;
-                    translate( [ r * cos( a ), r * sin( a ) ] ) circle( r = ri );
-                }
-            }
-        }
+        // Hard ownership boundary: no CELLULAR material may enter the reserved rim.
+        circle( r = inner_diameter / 2 );
     }
 }
 
@@ -3130,7 +3142,7 @@ module technic_gear(
 		"reduced_pattern", reduced_pattern,
 		body_mode == "reduced" ? reduced_pattern : "inactive",
 		body_mode == "reduced" ? "supported" : "derived",
-		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-circle-lattice-i8" : "classic-reduced-pattern",
+		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-circle-lattice-i9-rim-reserved" : "classic-reduced-pattern",
 		debug
 	);
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
