@@ -1615,6 +1615,116 @@ function technic_gear_reduced_ring_interlock_positive_clip_radius( inner_diamete
     inner_diameter / 2
     + max( 0, technic_gear_reduced_ring_interlock_width() - technic_gear_reduced_ring_reference_rim_gap() );
 
+
+
+/** WP13E CELLULAR-I8: staggered interlocking circular support lattice.
+ *
+ * 16T keeps the source 4019 four-circle reduced primitive.  Larger gears use
+ * concentric shells of FULL circular collars.  Each shell is staggered off the
+ * native axle axes; neighboring collars overlap circumferentially and collars
+ * on adjacent shells overlap radially.  The result is a continuous circle-based
+ * load network rather than a crosshair or spoke graph.
+ */
+function technic_gear_reduced_ring_cellular_shell_pitch() =
+    technic_gear_reduced_ring_cell_center_radius() + technic_gear_reduced_ring_cell_outer_radius(); // source cell radial reach
+function technic_gear_reduced_ring_cellular_overlap() =
+    technic_gear_reduced_ring_cell_wall_thickness();
+function technic_gear_reduced_ring_cellular_shell_count( inner_diameter ) =
+    let(
+        first = technic_gear_reduced_ring_cell_center_radius(),
+        target = technic_gear_reduced_ring_outer_shell_radius_from_inner_diameter( inner_diameter ),
+        pitch = technic_gear_reduced_ring_cellular_shell_pitch()
+    )
+    target <= first + 0.0001 ? 1 : 1 + ceil( ( target - first ) / pitch );
+function technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index ) =
+    let(
+        count = technic_gear_reduced_ring_cellular_shell_count( inner_diameter ),
+        first = technic_gear_reduced_ring_cell_center_radius(),
+        target = technic_gear_reduced_ring_outer_shell_radius_from_inner_diameter( inner_diameter )
+    )
+    count <= 1 ? first : first + shell_index * ( target - first ) / ( count - 1 );
+function technic_gear_reduced_ring_cellular_cell_count_for_radius( shell_radius, shell_index ) =
+    shell_index == 0
+        ? 4
+        : 4 * ceil(
+            shell_radius
+            / ( technic_gear_reduced_ring_cell_center_radius()
+                + technic_gear_reduced_ring_cell_outer_radius() )
+        );
+// Cumulative half-cell staggering.  Every scalable shell is offset from the
+// previous shell, preventing persistent radial hole rows / crosshair appearance.
+function technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, shell_index ) =
+    shell_index <= 0
+        ? 0
+        : technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, shell_index - 1 )
+          + 180 / technic_gear_reduced_ring_cellular_cell_count_for_radius(
+                technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index ),
+                shell_index
+            );
+function technic_gear_reduced_ring_cellular_outer_radius( shell_radius, cell_count, shell_index ) =
+    shell_index == 0
+        ? technic_gear_reduced_ring_cell_outer_radius()
+        : let(
+            circumferential = max(
+                technic_gear_reduced_ring_cell_outer_radius(),
+                shell_radius * sin( 180 / cell_count )
+                + technic_gear_reduced_ring_cellular_overlap() / 2
+            ),
+            core_bridge = shell_index == 1
+                ? sqrt(
+                    pow( shell_radius, 2 )
+                    + pow( technic_gear_reduced_ring_cell_center_radius(), 2 )
+                    - 2 * shell_radius
+                      * technic_gear_reduced_ring_cell_center_radius()
+                      * cos( 180 / cell_count )
+                  )
+                  - technic_gear_reduced_ring_cell_outer_radius()
+                  + technic_gear_reduced_ring_cellular_overlap()
+                : 0
+          )
+          max( circumferential, core_bridge );
+function technic_gear_reduced_ring_cellular_hole_radius( shell_index, outer_radius ) =
+    shell_index == 0
+        ? technic_gear_reduced_ring_cell_inner_radius()
+        : technic_gear_reduced_ring_cell_outer_radius();
+
+module technic_gear_reduced_ring_cellular_field_2d( inner_diameter ) {
+    shell_count = technic_gear_reduced_ring_cellular_shell_count( inner_diameter );
+
+    difference() {
+        union() {
+            for ( shell_index = [ 0 : shell_count - 1 ] ) {
+                r = technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index );
+                n = technic_gear_reduced_ring_cellular_cell_count_for_radius( r, shell_index );
+                phase = technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, shell_index );
+                ro = technic_gear_reduced_ring_cellular_outer_radius( r, n, shell_index );
+                for ( index = [ 0 : n - 1 ] ) {
+                    a = phase + 360 * index / n;
+                    translate( [ r * cos( a ), r * sin( a ) ] ) circle( r = ro );
+                }
+            }
+        }
+        union() {
+            for ( shell_index = [ 0 : shell_count - 1 ] ) {
+                r = technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index );
+                n = technic_gear_reduced_ring_cellular_cell_count_for_radius( r, shell_index );
+                phase = technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, shell_index );
+                ro = technic_gear_reduced_ring_cellular_outer_radius( r, n, shell_index );
+                ri = technic_gear_reduced_ring_cellular_hole_radius( shell_index, ro );
+                for ( index = [ 0 : n - 1 ] ) {
+                    a = phase + 360 * index / n;
+                    translate( [ r * cos( a ), r * sin( a ) ] ) circle( r = ri );
+                }
+            }
+        }
+    }
+}
+
+module technic_gear_reduced_ring_cellular_lattice_positive( height, inner_diameter ) {
+    linear_extrude( height = height, center = true )
+        technic_gear_reduced_ring_cellular_field_2d( inner_diameter = inner_diameter );
+}
+
 /** Fixed 4019-style collar used as a robust transfer joint between recursive arcs. */
 module technic_gear_reduced_ring_interlock_joint_collar( height ) {
     difference() {
@@ -2743,43 +2853,32 @@ module technic_gear_reduced_ring_open_axle_relief_negative( height ) {
     }
 }
 
-/** 4019 reduced pattern: relieved thin web + full-height curved load ribs. */
+/** 4019 reduced pattern: exact 16T primitive, scalable circular lattice. */
 module technic_gear_reduced_ring_body(
     root_diameter, inner_diameter, web_height, ring_height, center_height
 ) {
-    generation_count = technic_gear_reduced_ring_interlock_generation_count( inner_diameter );
+    shell_count = technic_gear_reduced_ring_cellular_shell_count( inner_diameter );
 
     union() {
-        if ( generation_count == 0 ) {
-            // Freeze the accepted 16T body exactly.
+        if ( shell_count == 1 ) {
+            // Freeze the accepted 16T construction: reduced web + source collars.
             technic_gear_webbed_ring_body(
                 root_diameter = root_diameter, inner_diameter = inner_diameter,
                 web_height = web_height, ring_height = ring_height
             );
+            technic_gear_reduced_ring_collars_positive( height = ring_height, inner_diameter = inner_diameter );
         } else {
-            // Thin reduced web with coffer openings.  The tooth-support rim is
-            // constructed separately so the weight-relief cutters cannot
-            // weaken it.
-            difference() {
-                cylinder( d = inner_diameter, h = web_height, center = true );
-                technic_gear_reduced_ring_coffer_openings_negative(
-                    height = web_height, inner_diameter = inner_diameter
-                );
-            }
-
+            // Full-height overlapping circular collars are the load-bearing body.
+            // No radial spokes or crosshair web is introduced.
             difference() {
                 cylinder( d = root_diameter, h = ring_height, center = true );
-                cylinder(
-                    d = inner_diameter,
-                    h = ring_height + EXTENSION_FOR_DIFFERENCE,
-                    center = true
-                );
+                cylinder( d = inner_diameter, h = ring_height + EXTENSION_FOR_DIFFERENCE, center = true );
             }
+            technic_gear_reduced_ring_cellular_lattice_positive(
+                height = ring_height, inner_diameter = inner_diameter
+            );
         }
 
-        technic_gear_reduced_ring_collars_positive( height = ring_height, inner_diameter = inner_diameter );
-        // 4019 owns only the positive center envelope; the fixed-phase axle
-        // cutter remains shared with every other center axle station.
         technic_gear_reduced_ring_center_positive( height = center_height );
     }
 }
@@ -3031,7 +3130,7 @@ module technic_gear(
 		"reduced_pattern", reduced_pattern,
 		body_mode == "reduced" ? reduced_pattern : "inactive",
 		body_mode == "reduced" ? "supported" : "derived",
-		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-reduced-ring-pattern" : "classic-reduced-pattern",
+		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-circle-lattice-i8" : "classic-reduced-pattern",
 		debug
 	);
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
