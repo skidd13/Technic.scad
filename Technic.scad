@@ -901,6 +901,84 @@ module _technic_gear_support_record( feature, requested, effective, state, reaso
 }
 
 /**
+ * Canonical local positive support for one secondary axle station (P1).
+ *
+ * The four cylindrical scallops are intrinsic to the local support. They are
+ * present even when neighboring pin-wall geometry is not instantiated.
+ */
+module technic_gear_axle_support( height ) {
+	cutout_offset = technic_gear_pin_hole_offset_from_center / sqrt( 2 );
+
+	difference() {
+		cube(
+			size = [
+				technic_gear_axle_reinforcement_width,
+				technic_gear_axle_reinforcement_height,
+				height
+			],
+			center = true
+		);
+
+		for ( x = [ -cutout_offset, cutout_offset ] ) {
+			for ( y = [ -cutout_offset, cutout_offset ] ) {
+				translate( [ x, y, 0 ] ) {
+					cylinder(
+						d = technic_gear_pin_hole_outer_diameter - ( EXTENSION_FOR_DIFFERENCE / 4 ),
+						h = height + EXTENSION_FOR_DIFFERENCE,
+						center = true
+					);
+				}
+			}
+		}
+	}
+}
+
+/**
+ * Negative axle-entry relief paired with P1.
+ *
+ * The relief follows the 10 mm long support axis. The default 9.4 mm length
+ * retains 0.3 mm positive material at each long-side end.
+ */
+module technic_gear_axle_entry_relief_cutout(
+	height,
+	length = technic_gear_axle_reinforcement_width - technic_pin_connector_shoulder_wall_thickness
+) {
+	relief_thickness = ( technic_axle_spline_thickness * technic_axle_interference_fit_ratio ) / 3;
+
+	linear_extrude( height = height + EXTENSION_FOR_DIFFERENCE, center = true ) {
+		technic_rounded_rectangle(
+			width = length,
+			height = relief_thickness,
+			radius = relief_thickness / 2
+		);
+	}
+}
+
+/**
+ * Canonical negative cutter for one P1-supported secondary axle station.
+ *
+ * The functional axle cross is invariant and is never rotated with the
+ * support. Only the shallow entry relief follows the selected P1 support
+ * orientation.
+ */
+module technic_gear_supported_axle_cutout(
+	height,
+	relief_length = technic_gear_axle_reinforcement_width - technic_pin_connector_shoulder_wall_thickness,
+	support_orientation = 0
+) {
+	assert(
+		support_orientation == 0 || support_orientation == 90,
+		str( "secondary axle support orientation must be 0 or 90 degrees: ", support_orientation )
+	);
+
+	technic_axle_hole( height = height );
+
+	rotate( [ 0, 0, support_orientation ] ) {
+		technic_gear_axle_entry_relief_cutout( height = height, length = relief_length );
+	}
+}
+
+/**
  * Positive material for the singular center connector.
  *
  * This module owns connector-local reinforcement only; the owning body remains
