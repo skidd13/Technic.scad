@@ -1136,26 +1136,44 @@ function technic_gear_double_bevel_arc_run() =
 	technic_gear_double_bevel_reference_face_z
 	- technic_gear_double_bevel_center_half_height;
 
-/** Tip radius on the fixed tangent circle at axial distance dz from handover. */
-function technic_gear_double_bevel_arc_tip_radius( teeth, dz ) =
+/** Tip diameter produced by the common involute source at a derived pitch. */
+function technic_gear_tooth_tip_diameter_for_pitch( teeth, pitch_diameter ) =
+	pitch_diameter * ( teeth + 2 ) / teeth;
+
+/**
+ * Tip radius on the shared fixed tangent circle at axial distance dz from
+ * handover. The caller supplies the pitch diameter owning the un-beveled
+ * tooth envelope, so the same radial law serves single and double forms.
+ */
+function technic_gear_radial_bevel_tip_radius(
+	teeth, pitch_diameter, dz, arc_radius = technic_gear_double_bevel_arc_radius
+) =
 	let(
-		tip_radius = technic_gear_tip_diameter( teeth ) / 2,
-		circle_center_radius = tip_radius - technic_gear_double_bevel_arc_radius
+		tip_radius = technic_gear_tooth_tip_diameter_for_pitch( teeth, pitch_diameter ) / 2,
+		circle_center_radius = tip_radius - arc_radius
 	)
 	circle_center_radius
-	+ sqrt(
-		max(
-			0,
-			technic_gear_double_bevel_arc_radius
-				* technic_gear_double_bevel_arc_radius
-			- dz * dz
-		)
-	);
+	+ sqrt( max( 0, arc_radius * arc_radius - dz * dz ) );
 
-/** Radial profile scale corresponding to the fixed-circle tip radius. */
+/** Radial profile scale corresponding to the shared fixed-circle tip radius. */
+function technic_gear_radial_bevel_scale(
+	teeth, pitch_diameter, dz, arc_radius = technic_gear_double_bevel_arc_radius
+) =
+	technic_gear_radial_bevel_tip_radius( teeth, pitch_diameter, dz, arc_radius )
+	/ ( technic_gear_tooth_tip_diameter_for_pitch( teeth, pitch_diameter ) / 2 );
+
+/** Accepted double-bevel wrappers retain the canonical module-1 envelope. */
+function technic_gear_double_bevel_arc_tip_radius( teeth, dz ) =
+	technic_gear_radial_bevel_tip_radius( teeth, technic_gear_pitch_diameter( teeth ), dz );
+
 function technic_gear_double_bevel_arc_scale( teeth, dz ) =
-	technic_gear_double_bevel_arc_tip_radius( teeth, dz )
-	/ ( technic_gear_tip_diameter( teeth ) / 2 );
+	technic_gear_radial_bevel_scale( teeth, technic_gear_pitch_diameter( teeth ), dz );
+
+/** Single-bevel tangent-circle radius scaled from the accepted normal form. */
+function technic_gear_single_bevel_arc_radius( tooth_height ) =
+	technic_gear_double_bevel_arc_radius
+	* tooth_height
+	/ technic_gear_12_tooth_tooth_thickness;
 
 /** Single-axial lip height derived proportionally from gear_height. */
 function technic_gear_single_lip_height( gear_height ) =
@@ -2207,7 +2225,7 @@ module technic_gear(
 			: ( axial_form != "double" ? "stepped-single-deferred" : "stepped-bevel-combination-deferred" ),
 		debug
 	);
-	_technic_gear_support_record( "bevel", bevel, effective_bevel, bevel_state, bevel_state == "supported" ? ( axial_form == "double" && effective_bevel == "double" ? "wp07-double-bevel" : "legacy-path" ) : "bevel-not-implemented", debug );
+	_technic_gear_support_record( "bevel", bevel, effective_bevel, bevel_state, bevel_state == "supported" ? ( axial_form == "double" && effective_bevel == "double" ? "wp07-double-bevel" : axial_form == "single" && effective_bevel == "single" ? "wp11b-single-radial-bevel" : "normal-no-bevel" ) : "bevel-not-implemented", debug );
 	_technic_gear_support_record(
 		"body_mode", body_mode, effective_body_mode, body_mode_state,
 		body_mode_state == "supported" ? ( axial_form == "double" ? "wp08-double-body-dispatcher" : "body-dispatcher" ) :
@@ -2408,14 +2426,16 @@ module technic_gear_single_bevel_cutter(
  * profile.  A very small inward overlap derived from EXTENSION_FOR_DIFFERENCE
  * keeps the swept crown manifold with the full-height root/filler ring.
  */
-module technic_gear_normal_tooth_crown_profile_2d( teeth ) {
+module technic_gear_normal_tooth_crown_profile_2d( teeth, pitch_diameter = undef ) {
 	include <lib/gears/gears.scad>;
 
-	// Exact module-1, 20-degree, zero-helix profile equations used by the
-	// pinned vendor spur_gear() call in technic_gear_normal_tooth_solid().
-	// Keeping the equations and vendor involute helpers identical avoids the
-	// repeated 3D projection cost while preserving the same crown geometry.
-	modul = 1;
+	// Exact 20-degree, zero-helix profile equations used by the pinned vendor
+	// spur_gear() call in technic_gear_normal_tooth_solid(). Double form keeps
+	// module 1; single form supplies its approved derived pitch diameter.
+	effective_pitch_diameter = is_undef( pitch_diameter )
+		? technic_gear_pitch_diameter( teeth )
+		: pitch_diameter;
+	modul = effective_pitch_diameter / teeth;
 	pressure_angle = 20;
 	helix_angle = 0;
 	d = modul * teeth;
@@ -2456,6 +2476,92 @@ module technic_gear_normal_tooth_crown_profile_2d( teeth ) {
 		// Remove the root circle while retaining a tiny positive overlap so the
 		// swept crowns join the independently full-height root/filler ring.
 		circle( r = max( 0, rf - crown_overlap ) );
+	}
+}
+
+/**
+ * Positive one-sided fixed-circle radial crown for a single bevel.
+ *
+ * The tangent handover is the body-side tooth plane. The crown then follows
+ * the same fixed-radius law used by the accepted double bevel all the way to
+ * the exposed face. The caller supplies the single-form derived pitch so the
+ * body-side tooth tips remain exactly coincident with the backing plate.
+ */
+module technic_gear_single_radial_bevel_crown(
+	teeth,
+	height,
+	pitch_diameter
+) {
+	segment_height = height / technic_gear_double_bevel_arc_segments;
+	handover_z = -height / 2;
+	handover_overlap = EXTENSION_FOR_DIFFERENCE / 100;
+	arc_radius = technic_gear_single_bevel_arc_radius( height );
+
+	translate( [ 0, 0, handover_z - handover_overlap ] ) {
+		linear_extrude( height = handover_overlap * 2 ) {
+			technic_gear_normal_tooth_crown_profile_2d(
+				teeth = teeth, pitch_diameter = pitch_diameter
+			);
+		}
+	}
+
+	for ( segment = [ 0 : technic_gear_double_bevel_arc_segments - 1 ] ) {
+		dz0 = segment * segment_height;
+		dz1 = ( segment + 1 ) * segment_height;
+		scale0 = technic_gear_radial_bevel_scale( teeth, pitch_diameter, dz0, arc_radius );
+		scale1 = technic_gear_radial_bevel_scale( teeth, pitch_diameter, dz1, arc_radius );
+
+		translate( [ 0, 0, handover_z + dz0 ] ) {
+			linear_extrude( height = segment_height, scale = scale1 / scale0 ) {
+				scale( [ scale0, scale0 ] ) {
+					technic_gear_normal_tooth_crown_profile_2d(
+						teeth = teeth, pitch_diameter = pitch_diameter
+					);
+				}
+			}
+		}
+	}
+}
+
+/**
+ * Complete positive single-bevel tooth/root solid.
+ *
+ * The root/filler ring stays full height. Only the involute crowns follow the
+ * one-sided fixed-circle continuation, tangent to the full body-side tooth
+ * profile and clipped at the actual exposed face.
+ */
+module technic_gear_single_bevel_tooth_solid(
+	teeth,
+	height,
+	bore,
+	pitch_diameter
+) {
+	tooth_module = pitch_diameter / teeth;
+	tip_radius = technic_gear_tooth_tip_diameter_for_pitch( teeth, pitch_diameter ) / 2;
+	root_diameter = pitch_diameter - 2 * tooth_module * ( 1 + 1 / 6 );
+	clip_extension = EXTENSION_FOR_DIFFERENCE / 100;
+
+	intersection() {
+		union() {
+			difference() {
+				cylinder( d = root_diameter, h = height, center = true );
+				cylinder(
+					d = bore - ( EXTENSION_FOR_DIFFERENCE / 2 ),
+					h = height + EXTENSION_FOR_DIFFERENCE,
+					center = true
+				);
+			}
+
+			technic_gear_single_radial_bevel_crown(
+				teeth = teeth, height = height, pitch_diameter = pitch_diameter
+			);
+		}
+
+		cylinder(
+			r = tip_radius + clip_extension,
+			h = height,
+			center = true
+		);
 	}
 }
 
@@ -2760,20 +2866,26 @@ module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole 
 				);
 			}
 
-			// The teeth. Use the shared involute solid with the single-form
-			// derived pitch diameter; beveling remains a separate exposed-face
-			// subtraction so the body-side profile remains full.
+			// The teeth. Non-bevel single gears use the ordinary shared involute
+			// solid. Beveled single gears use a positive one-sided fixed-circle
+			// crown, tangent to the same approved body-side tooth envelope.
 			translate( [ 0, 0, lip_height + base_height + ( tooth_height / 2 ) ] ) {
-				difference() {
-					technic_gear_normal_tooth_solid(
+				if ( bevel ) {
+					technic_gear_single_bevel_tooth_solid(
 						teeth = teeth,
 						height = tooth_height,
-						bore_diameter = hub_diameter - ( EXTENSION_FOR_DIFFERENCE / 2 ),
+						bore = hub_diameter - ( EXTENSION_FOR_DIFFERENCE / 2 ),
 						pitch_diameter = technic_gear_single_tooth_pitch_diameter( teeth )
 					);
-
-					if ( bevel ) {
-						technic_gear_single_bevel_cutter( teeth = teeth, height = tooth_height );
+				} else {
+					// Preserve the predecessor CSG grouping for the no-bevel control.
+					difference() {
+						technic_gear_normal_tooth_solid(
+							teeth = teeth,
+							height = tooth_height,
+							bore_diameter = hub_diameter - ( EXTENSION_FOR_DIFFERENCE / 2 ),
+							pitch_diameter = technic_gear_single_tooth_pitch_diameter( teeth )
+						);
 					}
 				}
 			}
