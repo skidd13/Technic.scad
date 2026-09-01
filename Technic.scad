@@ -1675,10 +1675,24 @@ function technic_gear_reduced_ring_cellular_outer_radius( shell_radius, cell_cou
     // recessed reduced web underneath, so scalable collars must not inflate
     // until they blanket the recess.
     technic_gear_reduced_ring_cell_outer_radius();
-function technic_gear_reduced_ring_cellular_hole_radius( shell_index, outer_radius ) =
-    technic_gear_reduced_ring_cell_inner_radius();
+function technic_gear_reduced_ring_cellular_hole_radius( inner_diameter, shell_index, outer_radius ) =
+    let(
+        shell_count = technic_gear_reduced_ring_cellular_shell_count( inner_diameter ),
+        radial_fraction = shell_count <= 1 ? 0 : shell_index / ( shell_count - 1 ),
+        // Smoothstep keeps the center visually close to the 4019 source while
+        // gently opening the relief toward the tooth-support rim.
+        eased_fraction = radial_fraction * radial_fraction * ( 3 - ( 2 * radial_fraction ) ),
+        // At maximum growth, two neighboring outer holes still retain one half
+        // of the source 4019 wall between them at the I13 golf-ball pitch.
+        maximum_radius_growth = technic_gear_reduced_ring_cell_wall_thickness() / 4
+    )
+    min(
+        outer_radius - ( technic_gear_reduced_ring_cell_wall_thickness() / 2 ),
+        technic_gear_reduced_ring_cell_inner_radius()
+        + ( maximum_radius_growth * eased_fraction )
+    );
 
-/** CELLULAR-I13 golf-packed recessed-web + source-sized circular stiffeners.
+/** CELLULAR-I14 golf-packed recessed-web + gently graded circular relief.
  *
  * Positive cellular support and negative weight relief are deliberately
  * separated.  The collar lattice is clipped to the reserved tooth-rim inner
@@ -1725,7 +1739,7 @@ module technic_gear_reduced_ring_cellular_openings_field_2d( inner_diameter ) {
                 n = technic_gear_reduced_ring_cellular_cell_count_for_radius( r, shell_index );
                 phase = technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, shell_index );
                 ro = technic_gear_reduced_ring_cellular_outer_radius( r, n, shell_index );
-                ri = technic_gear_reduced_ring_cellular_hole_radius( shell_index, ro );
+                ri = technic_gear_reduced_ring_cellular_hole_radius( inner_diameter, shell_index, ro );
 
                 if ( technic_gear_reduced_ring_cellular_hole_fits_rim(
                     inner_diameter, r, ri
@@ -3165,7 +3179,7 @@ module technic_gear(
 		"reduced_pattern", reduced_pattern,
 		body_mode == "reduced" ? reduced_pattern : "inactive",
 		body_mode == "reduced" ? "supported" : "derived",
-		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-circle-lattice-i12-denser-recessed-web-source-collars" : "classic-reduced-pattern",
+		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-i14-golf-packed-radially-graded-relief" : "classic-reduced-pattern",
 		debug
 	);
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
