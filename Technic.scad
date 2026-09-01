@@ -1626,11 +1626,11 @@ function technic_gear_reduced_ring_interlock_positive_clip_radius( inner_diamete
  * load network rather than a crosshair or spoke graph.
  */
 function technic_gear_reduced_ring_cellular_row_radius_increment() =
-    // I15: each newly added radial row grows the relief diameter by one
-    // eighth of the source 4019 wall thickness. Radius therefore grows by
-    // one sixteenth wall per row: visibly stepped in top view while remaining
-    // independent of total gear size / shell count.
-    technic_gear_reduced_ring_cell_wall_thickness() / 16;
+    // I17: strengthen the visible row-to-row diameter growth.  Each new row
+    // grows hole RADIUS by one tenth of the source 4019 wall thickness, so
+    // DIAMETER grows by one fifth wall per row.  Packing expands with the
+    // same local hole radius, preserving a source-derived material web.
+    technic_gear_reduced_ring_cell_wall_thickness() / 10;
 function technic_gear_reduced_ring_cellular_hole_radius_for_shell( shell_index ) =
     technic_gear_reduced_ring_cell_inner_radius()
     + shell_index * technic_gear_reduced_ring_cellular_row_radius_increment();
@@ -1659,29 +1659,42 @@ function technic_gear_reduced_ring_cellular_nominal_shell_radius( shell_index ) 
     // each transition pitch is ri(i)+ri(i+1)+wall and the closed form is:
     // first + k*base_pitch + k^2*growth.
     first + shell_index * base_pitch + shell_index * shell_index * growth;
+function technic_gear_reduced_ring_cellular_shell_fits( inner_diameter, shell_index ) =
+    technic_gear_reduced_ring_cellular_nominal_shell_radius( shell_index )
+    + technic_gear_reduced_ring_cellular_outer_radius_for_shell( shell_index )
+    + technic_gear_reduced_ring_reference_rim_gap()
+    <= inner_diameter / 2 + 0.0001;
 function technic_gear_reduced_ring_cellular_shell_count( inner_diameter ) =
     let(
-        target = technic_gear_reduced_ring_outer_shell_radius_from_inner_diameter( inner_diameter ),
+        // Closed-form estimate of the highest potentially useful row; the
+        // final filter below also accounts for the row's growing collar size.
         first = technic_gear_reduced_ring_cell_center_radius(),
         base_pitch = technic_gear_reduced_ring_cellular_pitch_for_shell( 0 ),
         growth = technic_gear_reduced_ring_cellular_row_radius_increment(),
-        // Solve growth*k^2 + base_pitch*k + first <= target.
-        max_index = target <= first + 0.0001
+        loose_target = max( first, inner_diameter / 2 - technic_gear_reduced_ring_reference_rim_gap() ),
+        estimate = loose_target <= first + 0.0001
             ? 0
-            : floor(
-                ( -base_pitch + sqrt( base_pitch * base_pitch + 4 * growth * ( target - first ) ) )
+            : ceil(
+                ( -base_pitch + sqrt( base_pitch * base_pitch + 4 * growth * ( loose_target - first ) ) )
                 / ( 2 * growth )
-            )
+            ) + 2,
+        fitting = [
+            for ( index = [ 0 : estimate ] )
+                if ( technic_gear_reduced_ring_cellular_shell_fits( inner_diameter, index ) ) index
+        ]
     )
-    max_index + 1;
+    max( 1, len( fitting ) );
 function technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index ) =
     let(
         count = technic_gear_reduced_ring_cellular_shell_count( inner_diameter ),
-        target = technic_gear_reduced_ring_outer_shell_radius_from_inner_diameter( inner_diameter ),
-        nominal_last = technic_gear_reduced_ring_cellular_nominal_shell_radius( count - 1 ),
-        // Spread any harmless leftover envelope space across the rows.  This
-        // never reduces the source-derived row spacing; it only lets the outer
-        // row approach the tooth-support rim cleanly.
+        last_index = count - 1,
+        target = inner_diameter / 2
+            - technic_gear_reduced_ring_cellular_outer_radius_for_shell( last_index )
+            - technic_gear_reduced_ring_reference_rim_gap(),
+        nominal_last = technic_gear_reduced_ring_cellular_nominal_shell_radius( last_index ),
+        // Spread only surplus envelope space; the source-derived local pitch
+        // is never compressed.  The last row therefore keeps the same rim gap
+        // even though its hole/collar is larger than inner rows.
         extra = count <= 1 ? 0 : max( 0, target - nominal_last )
     )
     count <= 1
@@ -1716,7 +1729,7 @@ function technic_gear_reduced_ring_cellular_hole_radius( inner_diameter, shell_i
         technic_gear_reduced_ring_cellular_hole_radius_for_shell( shell_index )
     );
 
-/** CELLULAR-I16 golf-packed recessed-web + row-wise growing circular relief.
+/** CELLULAR-I17 golf-packed recessed-web + stronger row-wise growing circular relief.
  *
  * Positive cellular support and negative weight relief are deliberately
  * separated.  The collar lattice is clipped to the reserved tooth-rim inner
@@ -3203,7 +3216,7 @@ module technic_gear(
 		"reduced_pattern", reduced_pattern,
 		body_mode == "reduced" ? reduced_pattern : "inactive",
 		body_mode == "reduced" ? "supported" : "derived",
-		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-i16-row-wise-growing-golf-relief" : "classic-reduced-pattern",
+		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-i17-stronger-row-wise-growing-golf-relief" : "classic-reduced-pattern",
 		debug
 	);
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
