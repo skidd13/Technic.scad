@@ -74,6 +74,15 @@ technic_pin_connector_shoulder_wall_thickness = 0.6;
 technic_pin_connector_shoulder_depth = 0.70;
 
 technic_gear_12_tooth_gear_diameter = 12.7;
+
+// Official single-bevel references 6589 (12T) and 32198/87407 (20T)
+// place the body-side tooth tips one LDraw unit (0.4 mm) beyond the
+// nominal tooth-count radius.  Keep that radial standard named so the
+// backing plate and body-side tooth envelope share one source of truth.
+technic_ldraw_unit_in_mm = 0.4;
+technic_gear_single_tip_radial_offset_lu = 1;
+technic_gear_single_tip_radial_offset =
+	technic_gear_single_tip_radial_offset_lu * technic_ldraw_unit_in_mm;
 technic_gear_12_tooth_base_thickness = 0.4;
 technic_gear_12_tooth_diameter = 12.6;
 technic_gear_12_tooth_hub_diameter = 6.3;
@@ -871,9 +880,6 @@ function technic_gear_double_tooth_section_height( gear_height, resolved_body_to
 		: resolved_body_topology == "solid" || resolved_body_topology == "hollow"
 			? gear_height
 			: assert( false, str( "invalid resolved body topology: ", resolved_body_topology ) );
-
-/** Millimetres per official LDraw unit. */
-technic_ldraw_unit_in_mm = 0.4;
 
 /**
  * WP10 fixed outer clutch-interface reference.
@@ -1898,19 +1904,43 @@ function technic_gear_center_radial_clearance_valid( center, axial_form, teeth )
 			? technic_gear_classic_rim_inner_diameter( teeth ) >= technic_pin_connector_outer_diameter
 			: true;
 
-/** Legacy single-form body diameter retained as a pure body helper. */
+/**
+ * Return the single-form backing-plate / body-side tooth-tip diameter.
+ *
+ * Official 6589 and 32198/87407 LDraw references use radii of 16 LDU
+ * for 12T and 26 LDU for 20T respectively.  Both resolve to the same
+ * rule: the body-side tip radius is the nominal tooth-count radius plus
+ * one LDraw unit.  This is deliberately single-form geometry and does
+ * not redefine the canonical module-1 double-gear diameter helpers.
+ */
 function technic_gear_single_body_diameter( teeth ) =
-	( teeth / 12 ) * technic_gear_12_tooth_gear_diameter;
+	teeth + 2 * technic_gear_single_tip_radial_offset;
+
+/**
+ * Derive the pitch diameter needed by the shared involute source so its
+ * body-side tip diameter lands exactly on the single backing plate.
+ */
+function technic_gear_single_tooth_pitch_diameter( teeth ) =
+	technic_gear_single_body_diameter( teeth ) * teeth / ( teeth + 2 );
 
 /** Legacy single-form exposed tooth length retained for hub sizing. */
 function technic_gear_single_exposed_tooth_length() =
 	technic_gear_12_tooth_gear_diameter - technic_gear_12_tooth_hub_diameter;
 
+/**
+ * Preserve the pre-correction hub-sizing reference independently from the
+ * corrected backing-plate diameter.  The radial-alignment correction owns
+ * only the backing plate, teeth, and bevel envelope; hub redesign is out of
+ * scope and remains frozen for the later single-body packages.
+ */
+function technic_gear_single_hub_reference_body_diameter( teeth ) =
+	( teeth / 12 ) * technic_gear_12_tooth_gear_diameter;
+
 /** Legacy single-form hub diameter, derived without center/tooth ownership. */
 function technic_gear_single_hub_diameter( teeth ) =
 	max(
 		technic_gear_12_tooth_hub_diameter,
-		technic_gear_single_body_diameter( teeth ) - technic_gear_single_exposed_tooth_length()
+		technic_gear_single_hub_reference_body_diameter( teeth ) - technic_gear_single_exposed_tooth_length()
 	);
 
 /**
@@ -2333,7 +2363,9 @@ module technic_gear_single_bevel_cutter(
 	height
 ) {
 	bevel_radial_per_axial = 3 / 6.5;
-	tip_radius = technic_gear_tip_diameter( teeth ) / 2;
+	// The single bevel starts at the same body-side radial envelope owned
+	// by the backing plate, not at the canonical module-1 double tip.
+	tip_radius = technic_gear_single_body_diameter( teeth ) / 2;
 	max_radial_removal = height * bevel_radial_per_axial;
 	z_extension = EXTENSION_FOR_DIFFERENCE;
 	outer_radius = tip_radius + max_radial_removal + EXTENSION_FOR_DIFFERENCE;
@@ -2703,14 +2735,16 @@ module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole 
 			// cross-form body dispatcher before both contracts are compatible.
 			technic_gear_filled_body_positive( teeth = teeth, gear_height = gear_height );
 
-			// The teeth. Use the shared module-1 involute solid; beveling is a
-			// separate exposed-face subtraction so the body-side profile remains full.
+			// The teeth. Use the shared involute solid with the single-form
+			// derived pitch diameter; beveling remains a separate exposed-face
+			// subtraction so the body-side profile remains full.
 			translate( [ 0, 0, lip_height + base_height + ( tooth_hub_height / 2 ) ] ) {
 				difference() {
 					technic_gear_normal_tooth_solid(
 						teeth = teeth,
 						height = tooth_hub_height,
-						bore_diameter = hub_diameter - ( EXTENSION_FOR_DIFFERENCE / 2 )
+						bore_diameter = hub_diameter - ( EXTENSION_FOR_DIFFERENCE / 2 ),
+						pitch_diameter = technic_gear_single_tooth_pitch_diameter( teeth )
 					);
 
 					if ( bevel ) {
