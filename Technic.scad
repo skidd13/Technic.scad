@@ -94,6 +94,12 @@ technic_gear_12_tooth_tooth_thickness = 2.4;
 technic_gear_12_tooth_tooth_width_at_bottom = 1.4;
 technic_gear_12_tooth_tooth_width_at_top = 0.8;
 
+/** Normal single-form total height derived from the existing axial standards. */
+technic_gear_single_reference_height =
+	technic_gear_12_tooth_lip_thickness
+	+ technic_gear_12_tooth_base_thickness
+	+ technic_gear_12_tooth_tooth_thickness;
+
 technic_gear_24_tooth_outer_diameter = 25.4;
 technic_gear_24_tooth_bottom_diameter = 21.65;
 technic_gear_24_tooth_inner_diameter = 19.6;
@@ -857,7 +863,7 @@ function technic_gear_classic_rim_inner_diameter( teeth ) =
  */
 function technic_gear_normal_height( axial_form ) =
 	axial_form == "double" ? 7.73 :
-	axial_form == "single" ? 3.6 :
+	axial_form == "single" ? technic_gear_single_reference_height :
 	assert( false, str( "invalid axial_form: ", axial_form ) );
 
 /** Double-axial secondary connector-wall height derived from gear_height. */
@@ -1051,7 +1057,7 @@ function technic_gear_stepped_outer_pitch_diameter( teeth ) =
 /** Resolved tooth-envelope height used by section records. */
 function technic_gear_tooth_section_envelope_height( gear_height, resolved_body_topology ) =
 	resolved_body_topology == "single"
-		? technic_gear_single_tooth_hub_height( gear_height )
+		? technic_gear_single_tooth_height( gear_height )
 		: technic_gear_double_tooth_section_height( gear_height, resolved_body_topology );
 
 /**
@@ -1152,13 +1158,23 @@ function technic_gear_double_bevel_arc_scale( teeth, dz ) =
 	/ ( technic_gear_tip_diameter( teeth ) / 2 );
 
 /** Single-axial lip height derived proportionally from gear_height. */
-function technic_gear_single_lip_height( gear_height ) = gear_height * ( 0.8 / 3.6 );
+function technic_gear_single_lip_height( gear_height ) =
+	gear_height * technic_gear_12_tooth_lip_thickness / technic_gear_single_reference_height;
 
 /** Single-axial base height derived proportionally from gear_height. */
-function technic_gear_single_base_height( gear_height ) = gear_height * ( 0.4 / 3.6 );
+function technic_gear_single_base_height( gear_height ) =
+	gear_height * technic_gear_12_tooth_base_thickness / technic_gear_single_reference_height;
 
-/** Single-axial tooth/hub height derived proportionally from gear_height. */
-function technic_gear_single_tooth_hub_height( gear_height ) = gear_height * ( 2.4 / 3.6 );
+/** Single-axial tooth/body-hub height derived proportionally from gear_height. */
+function technic_gear_single_tooth_height( gear_height ) =
+	gear_height * technic_gear_12_tooth_tooth_thickness / technic_gear_single_reference_height;
+
+/** Return whether all single-form axial dimensions remain positive. */
+function technic_gear_single_axial_dimensions_valid( gear_height ) =
+	is_num( gear_height ) && gear_height > 0
+	&& technic_gear_single_lip_height( gear_height ) > 0
+	&& technic_gear_single_base_height( gear_height ) > 0
+	&& technic_gear_single_tooth_height( gear_height ) > 0;
 
 /**
  * Return whether all owned axial dimensions are positive before geometry work.
@@ -1177,9 +1193,7 @@ function technic_gear_axial_dimensions_valid( axial_form, gear_height, resolved_
 							: false
 				)
 			: axial_form == "single"
-				? technic_gear_single_lip_height( gear_height ) > 0
-					&& technic_gear_single_base_height( gear_height ) > 0
-					&& technic_gear_single_tooth_hub_height( gear_height ) > 0
+				? technic_gear_single_axial_dimensions_valid( gear_height )
 				: false
 	);
 
@@ -1936,43 +1950,46 @@ function technic_gear_single_exposed_tooth_length() =
 function technic_gear_single_hub_reference_body_diameter( teeth ) =
 	( teeth / 12 ) * technic_gear_12_tooth_gear_diameter;
 
-/** Legacy single-form hub diameter, derived without center/tooth ownership. */
-function technic_gear_single_hub_diameter( teeth ) =
+/**
+ * Single-form body-hub diameter.
+ *
+ * `center` is resolved at the calculation boundary so later single-center
+ * placement does not need to rediscover body sizing.  WP11A deliberately
+ * preserves the accepted hub envelope for both axle and pin centers; the
+ * center-specific positive/negative geometry remains owned by WP11C.
+ *
+ * Hub sizing intentionally consumes the preserved pre-WP03B-C1 hub reference,
+ * not the corrected backing-plate diameter.  This prevents the radial envelope
+ * correction from leaking into hub geometry during this refactor.
+ */
+function technic_gear_single_hub_diameter( teeth, center ) =
+	assert( _technic_gear_value_in( center, [ "axle", "pin" ] ), str( "invalid center: ", center ) )
 	max(
 		technic_gear_12_tooth_hub_diameter,
 		technic_gear_single_hub_reference_body_diameter( teeth ) - technic_gear_single_exposed_tooth_length()
 	);
 
-/**
- * Positive continuous material for the supported filled body topology.
- *
- * This owns only the existing single-form lip/base/hub material. Teeth,
- * center connectors, secondary features, placement, and local reinforcement
- * remain outside the body layer.
- */
-module technic_gear_filled_body_positive( teeth, gear_height ) {
-	lip_height = technic_gear_single_lip_height( gear_height );
-	base_height = technic_gear_single_base_height( gear_height );
-	tooth_hub_height = technic_gear_single_tooth_hub_height( gear_height );
-	gear_diameter = technic_gear_single_body_diameter( teeth );
-	hub_diameter = technic_gear_single_hub_diameter( teeth );
-
-	// Axial lip/washer material.
-	linear_extrude( lip_height ) {
+/** Positive single-form lip/washer geometry only. */
+module technic_gear_single_lip_solid( outer_diameter, inner_diameter, height ) {
+	linear_extrude( height ) {
 		difference() {
-			circle( d = technic_gear_12_tooth_lip_outer_diameter );
-			circle( d = technic_gear_12_tooth_lip_inner_diameter );
+			circle( d = outer_diameter );
+			circle( d = inner_diameter );
 		}
 	}
+}
 
-	// Continuous base material.
-	translate( [ 0, 0, lip_height ] ) {
-		cylinder( d = gear_diameter, h = base_height );
-	}
+/**
+ * Positive single-form base and body-hub geometry only.
+ *
+ * Local Z=0 is the bottom of the base.  The owning assembly places this body
+ * above the separately owned lip; tooth and center geometry remain outside.
+ */
+module technic_gear_single_body_solid( gear_diameter, hub_diameter, base_height, tooth_height ) {
+	cylinder( d = gear_diameter, h = base_height );
 
-	// Continuous hub material. Connector selection remains outside.
-	translate( [ 0, 0, lip_height + base_height ] ) {
-		cylinder( d = hub_diameter, h = tooth_hub_height );
+	translate( [ 0, 0, base_height ] ) {
+		cylinder( d = hub_diameter, h = tooth_height );
 	}
 }
 
@@ -2137,7 +2154,7 @@ module technic_gear(
 		? body_mode
 		: body_mode == "hollow" ? "hollow" : legacy_body_mode;
 	resolved_body_topology = axial_form == "double" ? technic_gear_double_body_topology( teeth, body_mode ) : "single";
-	resolved_tooth_height = axial_form == "double" ? technic_gear_double_tooth_section_height( effective_height, resolved_body_topology ) : technic_gear_single_tooth_hub_height( effective_height );
+	resolved_tooth_height = axial_form == "double" ? technic_gear_double_tooth_section_height( effective_height, resolved_body_topology ) : technic_gear_single_tooth_height( effective_height );
 	tooth_section_records = technic_gear_tooth_section_records(
 		teeth, effective_height, effective_tooth_sections, resolved_body_topology
 	);
@@ -2724,31 +2741,39 @@ module technic_gear_single_sided( teeth = 12, bevel = true, center_hole = "axle"
 module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole = "axle", gear_height = technic_gear_normal_height( "single" ), body_mode = "filled" ) {
 	lip_height = technic_gear_single_lip_height( gear_height );
 	base_height = technic_gear_single_base_height( gear_height );
-	tooth_hub_height = technic_gear_single_tooth_hub_height( gear_height );
+	tooth_height = technic_gear_single_tooth_height( gear_height );
 	gear_diameter = technic_gear_single_body_diameter( teeth );
-	hub_diameter = technic_gear_single_hub_diameter( teeth );
+	hub_diameter = technic_gear_single_hub_diameter( teeth, center_hole );
 
 	difference() {
 		union() {
-			// Single-form body migration remains deferred to WP11.  Call the
-			// existing concrete single body directly; do not retain a broad
-			// cross-form body dispatcher before both contracts are compatible.
-			technic_gear_filled_body_positive( teeth = teeth, gear_height = gear_height );
+			technic_gear_single_lip_solid(
+				outer_diameter = technic_gear_12_tooth_lip_outer_diameter,
+				inner_diameter = technic_gear_12_tooth_lip_inner_diameter,
+				height = lip_height
+			);
+
+			translate( [ 0, 0, lip_height ] ) {
+				technic_gear_single_body_solid(
+					gear_diameter = gear_diameter, hub_diameter = hub_diameter,
+					base_height = base_height, tooth_height = tooth_height
+				);
+			}
 
 			// The teeth. Use the shared involute solid with the single-form
 			// derived pitch diameter; beveling remains a separate exposed-face
 			// subtraction so the body-side profile remains full.
-			translate( [ 0, 0, lip_height + base_height + ( tooth_hub_height / 2 ) ] ) {
+			translate( [ 0, 0, lip_height + base_height + ( tooth_height / 2 ) ] ) {
 				difference() {
 					technic_gear_normal_tooth_solid(
 						teeth = teeth,
-						height = tooth_hub_height,
+						height = tooth_height,
 						bore_diameter = hub_diameter - ( EXTENSION_FOR_DIFFERENCE / 2 ),
 						pitch_diameter = technic_gear_single_tooth_pitch_diameter( teeth )
 					);
 
 					if ( bevel ) {
-						technic_gear_single_bevel_cutter( teeth = teeth, height = tooth_hub_height );
+						technic_gear_single_bevel_cutter( teeth = teeth, height = tooth_height );
 					}
 				}
 			}
@@ -2758,10 +2783,10 @@ module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole 
 			// Remove the axle hole.
 			technic_gear_center_negative( center = "axle", height = 1 );
 		} else if ( center_hole == "pin" ) {
-			translate( [ 0, 0, lip_height + ( base_height + tooth_hub_height ) / 2 ] ) {
+			translate( [ 0, 0, lip_height + ( base_height + tooth_height ) / 2 ] ) {
 				technic_gear_center_negative(
 					center = "pin",
-					height = base_height + tooth_hub_height,
+					height = base_height + tooth_height,
 					pin_clearance_diameter = min( technic_pin_connector_outer_diameter, technic_gear_12_tooth_lip_inner_diameter )
 				);
 			}
