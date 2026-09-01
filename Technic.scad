@@ -1615,6 +1615,30 @@ function technic_gear_reduced_ring_interlock_positive_clip_radius( inner_diamete
     inner_diameter / 2
     + max( 0, technic_gear_reduced_ring_interlock_width() - technic_gear_reduced_ring_reference_rim_gap() );
 
+/** Fixed 4019-style collar used as a robust transfer joint between recursive arcs. */
+module technic_gear_reduced_ring_interlock_joint_collar( height ) {
+    difference() {
+        cylinder( r = technic_gear_reduced_ring_cell_outer_radius(), h = height, center = true );
+        cylinder(
+            r = technic_gear_reduced_ring_cell_inner_radius(),
+            h = height + EXTENSION_FOR_DIFFERENCE,
+            center = true
+        );
+    }
+}
+
+/** Four transfer collars at one recursive anchor generation. */
+module technic_gear_reduced_ring_interlock_joint_generation( generation, height ) {
+    anchor_radius = technic_gear_reduced_ring_interlock_anchor_radius( generation );
+    phase = technic_gear_reduced_ring_interlock_phase( generation );
+
+    for ( quadrant = [ 0 : 3 ] ) {
+        angle = phase + 90 * quadrant;
+        translate( [ anchor_radius * cos( angle ), anchor_radius * sin( angle ), 0 ] )
+            technic_gear_reduced_ring_interlock_joint_collar( height = height );
+    }
+}
+
 /**
  * Source-derived hollow-body proportions from the official LDraw 32269 hub
  * geometry.  The quarter-body source uses radius 17 for the body boundary and
@@ -2565,6 +2589,7 @@ module technic_gear_reduced_ring_collars_positive( height, inner_diameter ) {
         clip_radius = technic_gear_reduced_ring_interlock_positive_clip_radius( inner_diameter );
         generation_count = technic_gear_reduced_ring_interlock_generation_count( inner_diameter );
 
+        // Curved ribs carry load from one four-point anchor generation to the next.
         linear_extrude( height = height, center = true )
             union() {
                 for ( generation = [ 0 : generation_count - 1 ] )
@@ -2575,6 +2600,17 @@ module technic_gear_reduced_ring_collars_positive( height, inner_diameter ) {
                         clip_radius = clip_radius
                     );
             }
+
+        // A mathematical apex/tangency is not a robust structural joint.  Reuse
+        // the source 4019 collar itself at every INTERNAL transfer generation.
+        // The last apex terminates directly in the tooth-support rim and needs
+        // no extra collar.
+        if ( generation_count > 1 ) {
+            for ( generation = [ 1 : generation_count - 1 ] )
+                technic_gear_reduced_ring_interlock_joint_generation(
+                    generation = generation, height = height
+                );
+        }
     }
 }
 
@@ -2690,7 +2726,11 @@ module technic_gear_reduced_ring_open_axle_relief_negative( height ) {
     // its half-length from their 4 mm centre radius so the relief necessarily
     // overlaps the holes instead of stopping short of them.
     relief_length = 2 * technic_gear_reduced_ring_cell_center_radius();
-    relief_width = technic_axle_spline_thickness * technic_axle_interference_fit_ratio;
+    // Keep the canonical reduced P1 relief THICKNESS; only extend its length
+    // until the rounded end opens into the four source 4019 circular holes.
+    // This preserves the accepted reduced support appearance instead of
+    // turning the center into one oversized cross-shaped void.
+    relief_width = ( technic_axle_spline_thickness * technic_axle_interference_fit_ratio ) / 3;
 
     for ( angle = [ 0, 90 ] ) {
         rotate( [ 0, 0, angle ] )
