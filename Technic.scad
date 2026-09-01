@@ -1521,6 +1521,112 @@ function technic_gear_hollow_cross_effective_secondary_feature( teeth, requested
 	requested == "axle" ? ( has_axle ? "axle" : "none" ) :
 	requested == "pin+axle" ? ( has_pin && has_axle ? "pin+axle" : has_pin ? "pin" : has_axle ? "axle" : "none" ) : "none";
 
+/** WP13D FRAME-only dimensions from the official 32498 LDraw model. */
+technic_gear_hollow_frame_reference_root_radius_units = 37;
+technic_gear_hollow_frame_reference_rim_inner_radius_units = 29.5;
+technic_gear_hollow_frame_tooth_support_ring_width =
+	( technic_gear_hollow_frame_reference_root_radius_units - technic_gear_hollow_frame_reference_rim_inner_radius_units ) * 0.4;
+technic_gear_hollow_frame_first_station_radius = technic_gear_secondary_lattice_pitch;
+
+/** FRAME owns a fixed-width tooth-support rim independently from CROSS/RING. */
+function technic_gear_hollow_frame_rim_inner_diameter( teeth ) =
+	max( 0, technic_gear_root_diameter( teeth ) - ( 2 * technic_gear_hollow_frame_tooth_support_ring_width ) );
+
+/** Largest FRAME joint-center radius leaving its complete local pad inside the opening. */
+function technic_gear_hollow_frame_secondary_max_radius( teeth ) =
+	technic_gear_hollow_frame_rim_inner_diameter( teeth ) / 2
+	- ( technic_gear_pin_hole_outer_diameter / 2 );
+
+/** Effective radial radius of a diamond or axis-aligned square frame layer. */
+function _technic_gear_hollow_frame_layer_radius( shape, coordinate ) =
+	shape == "diamond" ? coordinate :
+	shape == "square" ? sqrt( 2 ) * coordinate :
+	assert( false, str( "invalid FRAME layer shape: ", shape ) );
+
+/**
+ * Grow complete FRAME generations on the Technic lattice.
+ *
+ * At one coordinate `a`, the diamond D(a) is followed by square S(a). The
+ * square's side centres are exactly the D(a) vertices. The next generation is
+ * D(2a), whose side centres are exactly the S(a) vertices. Therefore the
+ * recursive relation is D(a) -> S(a) -> D(2a) -> S(2a), with no transition
+ * members required between layers.
+ *
+ * D8 is the minimum 32498 anchor. S8 is admitted when it fits. Every later
+ * coordinate is admitted only as a complete D(a)+S(a) generation, preventing
+ * a final orphan diamond and keeping the visual grammar regular.
+ */
+function _technic_gear_hollow_frame_complete_generations( coordinate, maximum_radius ) =
+	let( square_radius = _technic_gear_hollow_frame_layer_radius( "square", coordinate ) )
+	square_radius <= maximum_radius
+		? concat(
+			[ [ "diamond", coordinate, coordinate ], [ "square", coordinate, square_radius ] ],
+			_technic_gear_hollow_frame_complete_generations( coordinate * 2, maximum_radius )
+		)
+		: [];
+
+function technic_gear_hollow_frame_layers( teeth ) =
+	let(
+		maximum_radius = technic_gear_hollow_frame_secondary_max_radius( teeth ),
+		first = technic_gear_hollow_frame_first_station_radius,
+		first_square_radius = _technic_gear_hollow_frame_layer_radius( "square", first )
+	)
+	maximum_radius < first ? [] :
+	maximum_radius < first_square_radius ? [ [ "diamond", first, first ] ] :
+	concat(
+		[ [ "diamond", first, first ], [ "square", first, first_square_radius ] ],
+		_technic_gear_hollow_frame_complete_generations( first * 2, maximum_radius )
+	);
+
+function _technic_gear_hollow_frame_layer_points( layer ) =
+	let( shape = layer[0], c = layer[1] )
+	shape == "diamond" ? [ [ c, 0 ], [ 0, c ], [ -c, 0 ], [ 0, -c ] ] :
+	shape == "square" ? [ [ c, c ], [ -c, c ], [ -c, -c ], [ c, -c ] ] :
+	assert( false, str( "invalid FRAME layer shape: ", shape ) );
+
+/** Every FRAME polygon vertex is a functional structural joint. */
+function technic_gear_hollow_frame_joint_points( teeth ) =
+	[ for ( layer = technic_gear_hollow_frame_layers( teeth ) ) for ( p = _technic_gear_hollow_frame_layer_points( layer ) ) p ];
+
+/** Backward diagnostic name: cardinal radii of diamond layers only. */
+function technic_gear_hollow_frame_secondary_radii( teeth ) =
+	[ for ( layer = technic_gear_hollow_frame_layers( teeth ) ) if ( layer[0] == "diamond" ) layer[1] ];
+
+/** No secondary stations exist between FRAME joints. */
+function technic_gear_hollow_frame_diagonal_points( teeth ) = [];
+
+function technic_gear_hollow_frame_secondary_points( teeth ) =
+	technic_gear_hollow_frame_joint_points( teeth );
+
+/**
+ * Mixed pin+axle allocation is joint-local and 180-degree symmetric.
+ * Cardinal diamond joints preserve the 32498 anchor: horizontal joints are
+ * pins, vertical joints are axles. Square joints alternate by diagonal pair.
+ * Axle-hole geometry itself remains fixed-phase at placement time.
+ */
+function _technic_gear_hollow_frame_joint_is_pin( point ) =
+	point[0] == 0 || point[1] == 0 ? point[1] == 0 : point[0] * point[1] > 0;
+
+function technic_gear_hollow_frame_pin_points( teeth, requested ) =
+	requested == "pin" ? technic_gear_hollow_frame_secondary_points( teeth ) :
+	requested == "pin+axle"
+		? [ for ( p = technic_gear_hollow_frame_joint_points( teeth ) ) if ( _technic_gear_hollow_frame_joint_is_pin( p ) ) p ] : [];
+
+function technic_gear_hollow_frame_axle_points( teeth, requested ) =
+	requested == "axle" ? technic_gear_hollow_frame_secondary_points( teeth ) :
+	requested == "pin+axle"
+		? [ for ( p = technic_gear_hollow_frame_joint_points( teeth ) ) if ( !_technic_gear_hollow_frame_joint_is_pin( p ) ) p ] : [];
+
+function technic_gear_hollow_frame_effective_secondary_feature( teeth, requested ) =
+	let(
+		has_pin = len( technic_gear_hollow_frame_pin_points( teeth, requested ) ) > 0,
+		has_axle = len( technic_gear_hollow_frame_axle_points( teeth, requested ) ) > 0
+	)
+	requested == "none" || requested == "clutch_single" || requested == "clutch_dual" ? "none" :
+	requested == "pin" ? ( has_pin ? "pin" : "none" ) :
+	requested == "axle" ? ( has_axle ? "axle" : "none" ) :
+	requested == "pin+axle" ? ( has_pin && has_axle ? "pin+axle" : has_pin ? "pin" : has_axle ? "axle" : "none" ) : "none";
+
 /** WP08 inner boundary of the tooth-support rim for each double topology. */
 function technic_gear_double_rim_inner_diameter( teeth, resolved_body_topology ) =
 	resolved_body_topology == "solid" ? 0 :
@@ -1564,6 +1670,8 @@ function technic_gear_hollow_structure_valid( teeth, hollow_structure, center, s
 		hub_diameter = technic_gear_double_hub_diameter( teeth, center, "hollow" ),
 		rim_inner_diameter = hollow_structure == "cross"
 			? technic_gear_hollow_cross_rim_inner_diameter( teeth )
+			: hollow_structure == "frame"
+			? technic_gear_hollow_frame_rim_inner_diameter( teeth )
 			: technic_gear_double_rim_inner_diameter( teeth, "hollow" ),
 		radial_open_span = ( rim_inner_diameter - hub_diameter ) / 2
 	)
@@ -1581,34 +1689,33 @@ function technic_gear_hollow_member_width( teeth, hollow_structure, center, seco
  */
 function technic_gear_hollow_structure_nodes( teeth, hollow_structure, center, secondary_feature ) =
 	let(
-		effective_secondary = technic_gear_secondary_effective_feature( teeth, secondary_feature ),
+		effective_secondary = hollow_structure == "frame"
+			? technic_gear_hollow_frame_effective_secondary_feature( teeth, secondary_feature )
+			: technic_gear_secondary_effective_feature( teeth, secondary_feature ),
 		hub_diameter = technic_gear_double_hub_diameter( teeth, center, "hollow" ),
 		rim_inner_diameter = hollow_structure == "cross"
 			? technic_gear_hollow_cross_rim_inner_diameter( teeth )
+			: hollow_structure == "frame"
+			? technic_gear_hollow_frame_rim_inner_diameter( teeth )
 			: technic_gear_double_rim_inner_diameter( teeth, "hollow" ),
 		member_width = technic_gear_hollow_member_width( teeth, hollow_structure, center, effective_secondary ),
 		hub_radius = hub_diameter / 2,
-		// Penetrate the rim by half an existing web thickness.  A merely tangent
-		// member/rim contact is visually connected but is not a robust manifold.
 		connection_overlap = technic_beam_webbing_thickness / 2,
 		rim_connection_radius = ( rim_inner_diameter / 2 ) - ( member_width / 2 ) + connection_overlap,
 		mid_radius = ( hub_radius + rim_connection_radius ) / 2,
-		frame_half_span = min(
-			technic_gear_secondary_lattice_half_pitch,
-			rim_connection_radius / sqrt( 2 )
-		),
+		frame_layers = hollow_structure == "frame" ? technic_gear_hollow_frame_layers( teeth ) : [],
+		frame_joint_points = hollow_structure == "frame" ? technic_gear_hollow_frame_joint_points( teeth ) : [],
+		frame_axle_points = hollow_structure == "frame" ? technic_gear_hollow_frame_axle_points( teeth, effective_secondary ) : [],
+		frame_pin_points = hollow_structure == "frame" ? technic_gear_hollow_frame_pin_points( teeth, effective_secondary ) : [],
+		frame_nodes = hollow_structure == "frame" ? concat(
+			[ [ 0, 0, "hub" ] ],
+			[ for ( point = frame_joint_points )
+				[ point[0], point[1],
+					_technic_gear_point_in_list( point, frame_axle_points ) ? "axle" :
+					_technic_gear_point_in_list( point, frame_pin_points ) ? "pin" : "structure" ] ]
+		) : [],
 		base_nodes = hollow_structure == "cross" ? [
 			[ 0, 0, "hub" ],
-			[ rim_connection_radius, 0, "structure" ],
-			[ -rim_connection_radius, 0, "structure" ],
-			[ 0, rim_connection_radius, "structure" ],
-			[ 0, -rim_connection_radius, "structure" ]
-		] : hollow_structure == "frame" ? [
-			[ 0, 0, "hub" ],
-			[ frame_half_span, frame_half_span, "structure" ],
-			[ -frame_half_span, frame_half_span, "structure" ],
-			[ -frame_half_span, -frame_half_span, "structure" ],
-			[ frame_half_span, -frame_half_span, "structure" ],
 			[ rim_connection_radius, 0, "structure" ],
 			[ -rim_connection_radius, 0, "structure" ],
 			[ 0, rim_connection_radius, "structure" ],
@@ -1624,17 +1731,13 @@ function technic_gear_hollow_structure_nodes( teeth, hollow_structure, center, s
 			[ 0, rim_connection_radius, "structure" ],
 			[ 0, -rim_connection_radius, "structure" ]
 		] : [],
-		axle_points = hollow_structure == "cross" ? [] :
+		axle_points = hollow_structure == "cross" || hollow_structure == "frame" ? [] :
 			( effective_secondary == "axle" || effective_secondary == "pin+axle"
 				? technic_gear_secondary_axle_stations( teeth ) : [] ),
-		pin_points = hollow_structure == "cross" ? [] :
+		pin_points = hollow_structure == "cross" || hollow_structure == "frame" ? [] :
 			( effective_secondary == "pin" || effective_secondary == "pin+axle"
 				? technic_gear_secondary_pin_stations( teeth ) : [] ),
 		base_points = [ for ( node = base_nodes ) [ node[0], node[1] ] ],
-		// A selected secondary station may coincide with a structural node
-		// (the 8 mm frame corners are the canonical example).  Upgrade the
-		// existing node role instead of duplicating its coordinate and creating
-		// a zero-length graph edge.
 		resolved_base_nodes = [
 			for ( node = base_nodes )
 				let(
@@ -1645,21 +1748,12 @@ function technic_gear_hollow_structure_nodes( teeth, hollow_structure, center, s
 				[ node[0], node[1], role ]
 		],
 		secondary_nodes = concat(
-			[
-				for ( point = axle_points )
-					if ( !_technic_gear_point_in_list( point, base_points ) )
-						[ point[0], point[1], "axle" ]
-			],
-			[
-				for ( point = pin_points )
-					if ( !_technic_gear_point_in_list( point, axle_points )
-						&& !_technic_gear_point_in_list( point, base_points ) )
-						[ point[0], point[1], "pin" ]
-			]
+			[ for ( point = axle_points ) if ( !_technic_gear_point_in_list( point, base_points ) ) [ point[0], point[1], "axle" ] ],
+			[ for ( point = pin_points ) if ( !_technic_gear_point_in_list( point, axle_points ) && !_technic_gear_point_in_list( point, base_points ) ) [ point[0], point[1], "pin" ] ]
 		)
 	)
 	technic_gear_hollow_structure_valid( teeth, hollow_structure, center, effective_secondary )
-		? concat( resolved_base_nodes, secondary_nodes ) : [];
+		? ( hollow_structure == "frame" ? frame_nodes : concat( resolved_base_nodes, secondary_nodes ) ) : [];
 
 /** Squared XY distance for deterministic hollow-graph attachment. */
 function _technic_gear_hollow_node_distance_squared( node_a, node_b ) =
@@ -1678,32 +1772,27 @@ function _technic_gear_hollow_nearest_base_node_index( nodes, station_index, bas
 	)
 	matches[0];
 
-/** WP08 graph edges, including local connections to selected secondary stations. */
-function technic_gear_hollow_structure_edges( nodes, hollow_structure ) =
+/** WP08 graph edges. FRAME polygons need no inter-layer connector edges. */
+function technic_gear_hollow_structure_edges( nodes, hollow_structure, teeth = undef ) =
 	let(
-		base_count = hollow_structure == "cross" ? 5 : hollow_structure == "frame" || hollow_structure == "ring" ? 9 : 0,
+		frame_layers = hollow_structure == "frame" && !is_undef( teeth ) ? technic_gear_hollow_frame_layers( teeth ) : [],
+		frame_layer_count = len( frame_layers ),
+		frame_edges = hollow_structure == "frame" && frame_layer_count > 0 ?
+			[ for ( layer = [ 0 : frame_layer_count - 1 ] )
+				for ( edge = [ [ 0,1 ], [ 1,2 ], [ 2,3 ], [ 3,0 ] ] )
+					[ 1 + 4 * layer + edge[0], 1 + 4 * layer + edge[1] ] ] : [],
+		base_count = hollow_structure == "cross" ? 5 : hollow_structure == "ring" ? 9 : 0,
 		base_edges = hollow_structure == "cross" ? [
 			[ 0, 1 ], [ 0, 2 ], [ 0, 3 ], [ 0, 4 ]
-		] : hollow_structure == "frame" ? [
-			// The frame must be one load path from the center hub to the rim.
-			// Four symmetric hub links prevent a visually plausible but
-			// mechanically disconnected square/rim shell.
-			[ 0, 1 ], [ 0, 2 ], [ 0, 3 ], [ 0, 4 ],
-			[ 1, 2 ], [ 2, 3 ], [ 3, 4 ], [ 4, 1 ],
-			[ 5, 1 ], [ 5, 4 ], [ 6, 2 ], [ 6, 3 ],
-			[ 7, 1 ], [ 7, 2 ], [ 8, 3 ], [ 8, 4 ]
 		] : hollow_structure == "ring" ? [
 			[ 0, 1 ], [ 0, 2 ], [ 0, 3 ], [ 0, 4 ],
 			[ 1, 5 ], [ 2, 6 ], [ 3, 7 ], [ 4, 8 ]
 		] : [],
-		secondary_edges = len( nodes ) > base_count
-			? [
-				for ( i = [ base_count : len( nodes ) - 1 ] )
-					[ _technic_gear_hollow_nearest_base_node_index( nodes, i, base_count ), i ]
-			] : []
+		secondary_edges = base_count > 0 && len( nodes ) > base_count
+			? [ for ( i = [ base_count : len( nodes ) - 1 ] ) [ _technic_gear_hollow_nearest_base_node_index( nodes, i, base_count ), i ] ] : []
 	)
-	base_count > 0 && len( nodes ) >= base_count
-		? concat( base_edges, secondary_edges ) : [];
+	hollow_structure == "frame" ? frame_edges :
+	base_count > 0 && len( nodes ) >= base_count ? concat( base_edges, secondary_edges ) : [];
 
 /** P1 reinforcement is required only for genuinely reduced local topology. */
 function technic_gear_axle_support_required( resolved_body_topology ) = resolved_body_topology == "reduced";
@@ -1748,6 +1837,8 @@ function technic_gear_secondary_effective_feature( teeth, requested ) =
 function technic_gear_secondary_effective_feature_resolved( teeth, requested, body_mode, hollow_structure ) =
 	body_mode == "hollow" && hollow_structure == "cross"
 		? technic_gear_hollow_cross_effective_secondary_feature( teeth, requested )
+		: body_mode == "hollow" && hollow_structure == "frame"
+		? technic_gear_hollow_frame_effective_secondary_feature( teeth, requested )
 		: technic_gear_secondary_effective_feature( teeth, requested );
 
 /** Build one axle station with all applicability resolved before placement. */
@@ -1774,6 +1865,8 @@ function technic_gear_axle_station_records( teeth, center, secondary_feature, bo
 	let(
 		secondary_axle_points = body_mode == "hollow" && hollow_structure == "cross"
 			? technic_gear_hollow_cross_axle_points( teeth, secondary_feature )
+			: body_mode == "hollow" && hollow_structure == "frame"
+			? technic_gear_hollow_frame_axle_points( teeth, secondary_feature )
 			: ( secondary_feature == "axle" || secondary_feature == "pin+axle" ? technic_gear_secondary_axle_stations( teeth ) : [] )
 	)
 	concat(
@@ -1830,6 +1923,8 @@ module technic_gear_secondary_pins_positive( teeth, secondary_feature, height ) 
 module technic_gear_secondary_pins_negative( teeth, secondary_feature, height, body_mode = "reduced", hollow_structure = undef ) {
 	points = body_mode == "hollow" && hollow_structure == "cross"
 		? technic_gear_hollow_cross_pin_points( teeth, secondary_feature )
+		: body_mode == "hollow" && hollow_structure == "frame"
+		? technic_gear_hollow_frame_pin_points( teeth, secondary_feature )
 		: ( secondary_feature == "pin" || secondary_feature == "pin+axle" ? technic_gear_secondary_pin_stations( teeth ) : [] );
 	for ( point = points ) {
 		translate( [ point[0], point[1], 0 ] ) {
@@ -2243,6 +2338,9 @@ module technic_gear_hollow_frame_body(
 ) {
 	union() {
 		_technic_gear_hollow_hub_and_rim( hub_diameter, rim_inner_diameter, rim_outer_diameter, height );
+		// FRAME is an extension of CROSS: keep the cardinal backbone continuously hub-to-rim.
+		// Use the same member width as every square/diamond edge.
+		_technic_gear_hollow_cross_members( rim_outer_diameter, member_width, height );
 		_technic_gear_hollow_graph_members( nodes, edges, member_width, height );
 		_technic_gear_hollow_node_pads( nodes, member_width, height );
 	}
@@ -2346,6 +2444,8 @@ module technic_gear(
 	body_inner_diameter = axial_form == "double"
 		? ( resolved_body_topology == "hollow" && hollow_structure == "cross"
 			? technic_gear_hollow_cross_rim_inner_diameter( teeth )
+			: resolved_body_topology == "hollow" && hollow_structure == "frame"
+			? technic_gear_hollow_frame_rim_inner_diameter( teeth )
 			: technic_gear_double_rim_inner_diameter( teeth, resolved_body_topology ) )
 		: 0;
 	body_hub_diameter = axial_form == "double" ? technic_gear_double_hub_diameter( teeth, center, resolved_body_topology ) : 0;
@@ -2356,7 +2456,7 @@ module technic_gear(
 		? technic_gear_hollow_member_width( teeth, hollow_structure, center, effective_secondary_feature ) : 0;
 	hollow_nodes = hollow_valid
 		? technic_gear_hollow_structure_nodes( teeth, hollow_structure, center, effective_secondary_feature ) : [];
-	hollow_edges = hollow_valid ? technic_gear_hollow_structure_edges( hollow_nodes, hollow_structure ) : [];
+	hollow_edges = hollow_valid ? technic_gear_hollow_structure_edges( hollow_nodes, hollow_structure, teeth ) : [];
 	height_state = "supported";
 	tooth_sections_state = tooth_sections == effective_tooth_sections ? "supported" : "fallback";
 	bevel_state = bevel == effective_bevel ? "supported" : "fallback";
