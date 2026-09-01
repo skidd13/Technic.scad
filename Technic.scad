@@ -2377,7 +2377,7 @@ module technic_gear(
 			);
 		}
 	} else {
-		_technic_gear_single_sided_legacy( teeth = teeth, bevel = effective_bevel == "single", center_hole = effective_center, gear_height = effective_height, body_mode = effective_body_mode );
+		_technic_gear_single_assembly( teeth = teeth, bevel = effective_bevel == "single", center_hole = effective_center, gear_height = effective_height, body_mode = effective_body_mode );
 	}
 }
 
@@ -2916,7 +2916,7 @@ module technic_gear_single_sided( teeth = 12, bevel = true, center_hole = "axle"
 	);
 }
 
-module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole = "axle", gear_height = technic_gear_normal_height( "single" ), body_mode = "filled" ) {
+module _technic_gear_single_assembly( teeth = 12, bevel = true, center_hole = "axle", gear_height = technic_gear_normal_height( "single" ), body_mode = "filled" ) {
 	lip_height = technic_gear_single_lip_height( gear_height );
 	base_height = technic_gear_single_base_height( gear_height );
 	tooth_height = technic_gear_single_tooth_height( gear_height );
