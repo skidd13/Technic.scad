@@ -1500,12 +1500,120 @@ function technic_gear_reduced_ring_cell_inner_radius() =
     technic_gear_reduced_ring_cell_inner_radius_ldu * technic_ldraw_unit_in_mm;
 function technic_gear_reduced_ring_cell_outer_radius() =
     technic_gear_reduced_ring_cell_outer_radius_ldu * technic_ldraw_unit_in_mm;
+function technic_gear_reduced_ring_cell_wall_thickness() =
+    technic_gear_reduced_ring_cell_outer_radius() - technic_gear_reduced_ring_cell_inner_radius();
+/** Circumferential support rib uses the source cell wall thickness. */
+function technic_gear_reduced_ring_wave_ring_width() =
+    technic_gear_reduced_ring_cell_wall_thickness();
 function technic_gear_reduced_ring_rim_inner_diameter( teeth ) =
     max( 0, technic_gear_root_diameter( teeth ) - ( 2 * technic_gear_reduced_ring_tooth_support_ring_width ) );
 function technic_gear_reduced_ring_web_height( gear_height ) =
     gear_height
     * ( 2 * technic_gear_reduced_ring_reference_web_half_height_ldu )
     / ( 2 * technic_gear_reduced_ring_reference_half_height_ldu );
+
+function technic_gear_reduced_ring_reference_rim_gap() =
+    technic_gear_reduced_ring_rim_inner_diameter( 16 ) / 2
+    - technic_gear_reduced_ring_cell_center_radius()
+    - technic_gear_reduced_ring_cell_outer_radius();
+function technic_gear_reduced_ring_outer_shell_radius_from_inner_diameter( inner_diameter ) =
+    max(
+        technic_gear_reduced_ring_cell_center_radius(),
+        inner_diameter / 2
+        - technic_gear_reduced_ring_cell_outer_radius()
+        - technic_gear_reduced_ring_reference_rim_gap()
+    );
+function technic_gear_reduced_ring_max_shell_pitch() =
+    ( 2 * technic_gear_reduced_ring_cell_outer_radius() )
+    + technic_gear_reduced_ring_reference_rim_gap();
+function technic_gear_reduced_ring_shell_count_from_inner_diameter( inner_diameter ) =
+    let(
+        first_shell_radius = technic_gear_reduced_ring_cell_center_radius(),
+        outer_shell_radius = technic_gear_reduced_ring_outer_shell_radius_from_inner_diameter( inner_diameter )
+    )
+    outer_shell_radius <= first_shell_radius + 0.0001
+        ? 1
+        : 1 + ceil(
+            ( outer_shell_radius - first_shell_radius )
+            / technic_gear_reduced_ring_max_shell_pitch()
+        );
+function technic_gear_reduced_ring_shell_radius_from_inner_diameter( inner_diameter, index ) =
+    let(
+        shell_count = technic_gear_reduced_ring_shell_count_from_inner_diameter( inner_diameter ),
+        first_shell_radius = technic_gear_reduced_ring_cell_center_radius(),
+        outer_shell_radius = technic_gear_reduced_ring_outer_shell_radius_from_inner_diameter( inner_diameter )
+    )
+    shell_count <= 1
+        ? first_shell_radius
+        : first_shell_radius + ( index * ( outer_shell_radius - first_shell_radius ) / ( shell_count - 1 ) );
+function technic_gear_reduced_ring_shell_radii_from_inner_diameter( inner_diameter ) =
+    [
+        for ( index = [ 0 : technic_gear_reduced_ring_shell_count_from_inner_diameter( inner_diameter ) - 1 ] )
+            technic_gear_reduced_ring_shell_radius_from_inner_diameter( inner_diameter, index )
+    ];
+function technic_gear_reduced_ring_shell_cell_count( shell_radius ) =
+    max(
+        4,
+        4 * ceil( shell_radius / technic_gear_reduced_ring_cell_center_radius() )
+    );
+// Quarter-step twist from the source 4-cell shell.  The structural annular
+// ribs/waves carry load, so hole shells may rotate without creating a spoke
+// dependency.  22.5 deg is one quarter of the 4019 shell's 90 deg pitch.
+function technic_gear_reduced_ring_shell_phase( shell_index ) = 22.5 * shell_index;
+function technic_gear_reduced_ring_shell_points( shell_radius, cell_count, phase = 0 ) =
+    [
+        for ( index = [ 0 : cell_count - 1 ] )
+            [
+                shell_radius * cos( phase + 360 * index / cell_count ),
+                shell_radius * sin( phase + 360 * index / cell_count )
+            ]
+    ];
+
+
+/** WP13E recursive semicircle scale resolver.
+ *
+ * The accepted 4019 four-circle core supplies four cardinal anchor points at
+ * radius a0 = 4 mm.  One generation connects every adjacent anchor pair with
+ * the OUTWARD semicircle whose diameter is exactly that pair.  Geometry then
+ * closes analytically:
+ *
+ *   semicircle radius = a / sqrt(2)
+ *   semicircle centre radius = a / sqrt(2)
+ *   next anchor radius = a * sqrt(2)
+ *   next anchor phase = phase + 45 deg
+ *
+ * Thus each generation is derived only from the previous four anchors.  No
+ * arbitrary circle offsets, spoke grid, or concentric-ring stack is needed.
+ */
+function technic_gear_reduced_ring_interlock_width() =
+    technic_gear_reduced_ring_cell_wall_thickness();
+function technic_gear_reduced_ring_interlock_growth() = sqrt( 2 );
+function technic_gear_reduced_ring_interlock_first_anchor_radius() =
+    technic_gear_reduced_ring_cell_center_radius();
+function technic_gear_reduced_ring_interlock_anchor_radius( generation ) =
+    technic_gear_reduced_ring_interlock_first_anchor_radius()
+    * exp( generation * ln( technic_gear_reduced_ring_interlock_growth() ) );
+function technic_gear_reduced_ring_interlock_arc_radius( generation ) =
+    technic_gear_reduced_ring_interlock_anchor_radius( generation ) / sqrt( 2 );
+function technic_gear_reduced_ring_interlock_phase( generation ) =
+    45 * generation;
+function technic_gear_reduced_ring_interlock_outer_anchor_target( inner_diameter ) =
+    max(
+        technic_gear_reduced_ring_interlock_first_anchor_radius(),
+        inner_diameter / 2 - technic_gear_reduced_ring_reference_rim_gap()
+    );
+function technic_gear_reduced_ring_interlock_generation_count( inner_diameter ) =
+    let(
+        target = technic_gear_reduced_ring_interlock_outer_anchor_target( inner_diameter ),
+        first = technic_gear_reduced_ring_interlock_first_anchor_radius(),
+        growth = technic_gear_reduced_ring_interlock_growth()
+    )
+    target <= first + 0.0001
+        ? 0
+        : ceil( ln( target / first ) / ln( growth ) );
+function technic_gear_reduced_ring_interlock_positive_clip_radius( inner_diameter ) =
+    inner_diameter / 2
+    + max( 0, technic_gear_reduced_ring_interlock_width() - technic_gear_reduced_ring_reference_rim_gap() );
 
 /**
  * Source-derived hollow-body proportions from the official LDraw 32269 hub
@@ -2392,12 +2500,54 @@ module technic_gear_webbed_ring_body( root_diameter, inner_diameter, web_height,
 	}
 }
 
-/** Positive collars around the four 4019 circular cutouts. */
-module technic_gear_reduced_ring_collars_positive( height ) {
-    center_radius = technic_gear_reduced_ring_cell_center_radius();
+/**
+ * One generation of the recursive 4019 semicircle support mesh.
+ *
+ * Four outward semicircles connect the four adjacent anchor pairs.  Each arc
+ * is obtained by taking a source-width circular rib and keeping only the half
+ * outside its anchor chord.  The chord endpoints are exactly the current
+ * generation anchors; the outer apex is exactly the next generation anchor.
+ */
+module technic_gear_reduced_ring_interlock_generation_2d(
+    anchor_radius, phase, width, clip_radius
+) {
+    arc_radius = anchor_radius / sqrt( 2 );
+    arc_extent = arc_radius + width;
+
+    for ( quadrant = [ 0 : 3 ] ) {
+        mid_phase = phase + 45 + 90 * quadrant;
+        center = [
+            arc_radius * cos( mid_phase ),
+            arc_radius * sin( mid_phase )
+        ];
+
+        intersection() {
+            circle( r = clip_radius );
+
+            translate( center )
+                rotate( mid_phase )
+                    intersection() {
+                        difference() {
+                            circle( r = arc_radius + width / 2 );
+                            circle( r = max( 0, arc_radius - width / 2 ) );
+                        }
+
+                        // Local +X is radially outward from the gear centre.
+                        translate( [ 0, -arc_extent ] )
+                            square( [ arc_extent * 2, arc_extent * 2 ] );
+                    }
+        }
+    }
+}
+
+/** Positive 4019 core collars plus the recursive semicircle support mesh. */
+module technic_gear_reduced_ring_collars_positive( height, inner_diameter ) {
     inner_radius = technic_gear_reduced_ring_cell_inner_radius();
     outer_radius = technic_gear_reduced_ring_cell_outer_radius();
+    shell_count = technic_gear_reduced_ring_shell_count_from_inner_diameter( inner_diameter );
+    center_radius = technic_gear_reduced_ring_cell_center_radius();
 
+    // Freeze the accepted 16T primitive exactly: four source-sized collars.
     for ( point = [
         [ center_radius, 0 ], [ -center_radius, 0 ],
         [ 0, center_radius ], [ 0, -center_radius ]
@@ -2409,12 +2559,34 @@ module technic_gear_reduced_ring_collars_positive( height ) {
             }
         }
     }
+
+    if ( shell_count > 1 ) {
+        width = technic_gear_reduced_ring_interlock_width();
+        clip_radius = technic_gear_reduced_ring_interlock_positive_clip_radius( inner_diameter );
+        generation_count = technic_gear_reduced_ring_interlock_generation_count( inner_diameter );
+
+        linear_extrude( height = height, center = true )
+            union() {
+                for ( generation = [ 0 : generation_count - 1 ] )
+                    technic_gear_reduced_ring_interlock_generation_2d(
+                        anchor_radius = technic_gear_reduced_ring_interlock_anchor_radius( generation ),
+                        phase = technic_gear_reduced_ring_interlock_phase( generation ),
+                        width = width,
+                        clip_radius = clip_radius
+                    );
+            }
+    }
 }
 
-/** Four through-openings that carve both reduced web and shared center support. */
-module technic_gear_reduced_ring_openings_negative( height ) {
-    center_radius = technic_gear_reduced_ring_cell_center_radius();
+/** Through-openings remain the invariant four-circle 4019 core.
+ *
+ * The scalable semicircles are positive full-height ribs over the reduced web,
+ * not additional through-cutouts.  This preserves a continuous thin shear web
+ * beneath the interlocking curved load paths, analogous to a coffered shell.
+ */
+module technic_gear_reduced_ring_openings_negative( height, inner_diameter ) {
     inner_radius = technic_gear_reduced_ring_cell_inner_radius();
+    center_radius = technic_gear_reduced_ring_cell_center_radius();
 
     for ( point = [
         [ center_radius, 0 ], [ -center_radius, 0 ],
@@ -2453,7 +2625,10 @@ module technic_gear_reduced_ring_center_positive( height ) {
  * 6-LDU half-length leaves the thin molded bridge before each round opening.
  */
 module technic_gear_reduced_ring_open_axle_relief_negative( height ) {
-    relief_length = 2 * technic_gear_reduced_ring_center_relief_axis_ldu * technic_ldraw_unit_in_mm;
+    // The real 16T relief opens directly into all four circular holes.  Derive
+    // its half-length from their 4 mm centre radius so the relief necessarily
+    // overlaps the holes instead of stopping short of them.
+    relief_length = 2 * technic_gear_reduced_ring_cell_center_radius();
     relief_width = technic_axle_spline_thickness * technic_axle_interference_fit_ratio;
 
     for ( angle = [ 0, 90 ] ) {
@@ -2476,7 +2651,7 @@ module technic_gear_reduced_ring_body(
             root_diameter = root_diameter, inner_diameter = inner_diameter,
             web_height = web_height, ring_height = ring_height
         );
-        technic_gear_reduced_ring_collars_positive( height = ring_height );
+        technic_gear_reduced_ring_collars_positive( height = ring_height, inner_diameter = inner_diameter );
         // 4019 owns only the positive center envelope; the fixed-phase axle
         // cutter remains shared with every other center axle station.
         technic_gear_reduced_ring_center_positive( height = center_height );
@@ -3296,8 +3471,18 @@ module _technic_gear_double_sided_legacy(
 		// Its four cardinal circular openings reshape that shared support instead
 		// of replacing it with a bespoke center primitive.
 		if ( resolved_body_topology == "reduced" && reduced_pattern == "ring" ) {
-			technic_gear_reduced_ring_open_axle_relief_negative( height = gear_height );
-			technic_gear_reduced_ring_openings_negative( height = gear_height );
+			if ( technic_gear_reduced_ring_shell_count_from_inner_diameter( body_inner_diameter ) == 1 ) {
+				// Preserve the exact accepted-looking 4019 one-shell Boolean path.
+				technic_gear_reduced_ring_open_axle_relief_negative( height = gear_height );
+				technic_gear_reduced_ring_openings_negative( height = gear_height, inner_diameter = body_inner_diameter );
+			} else {
+				// Large patterns use one combined cutter operand to keep CSG
+				// normalization bounded while preserving the same geometry.
+				union() {
+					technic_gear_reduced_ring_open_axle_relief_negative( height = gear_height );
+					technic_gear_reduced_ring_openings_negative( height = gear_height, inner_diameter = body_inner_diameter );
+				}
+			}
 		}
 
 		if ( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" ) {
