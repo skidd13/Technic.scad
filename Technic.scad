@@ -898,6 +898,42 @@ function technic_gear_double_bevel_uncut_height( tooth_height ) =
 function technic_gear_double_bevel_face_depth( tooth_height ) =
 	( tooth_height - technic_gear_double_bevel_uncut_height( tooth_height ) ) / 2;
 
+/**
+ * Fixed local reference geometry for the positive radial double-bevel tooth.
+ * Values are expressed from the agreed LEGO/LDraw reference stations and are
+ * intentionally independent of tooth count and requested gear height.
+ */
+technic_gear_double_bevel_center_half_height = 3 * 0.4;       // 1.20 mm
+technic_gear_double_bevel_reference_face_z   = 10 * 0.4;      // 4.00 mm
+technic_gear_double_bevel_arc_radius         = 8.125 * 0.4;   // 3.25 mm
+technic_gear_double_bevel_arc_segments       = 8;
+
+/** Fixed axial run of one radial crown continuation. */
+function technic_gear_double_bevel_arc_run() =
+	technic_gear_double_bevel_reference_face_z
+	- technic_gear_double_bevel_center_half_height;
+
+/** Tip radius on the fixed tangent circle at axial distance dz from handover. */
+function technic_gear_double_bevel_arc_tip_radius( teeth, dz ) =
+	let(
+		tip_radius = technic_gear_tip_diameter( teeth ) / 2,
+		circle_center_radius = tip_radius - technic_gear_double_bevel_arc_radius
+	)
+	circle_center_radius
+	+ sqrt(
+		max(
+			0,
+			technic_gear_double_bevel_arc_radius
+				* technic_gear_double_bevel_arc_radius
+			- dz * dz
+		)
+	);
+
+/** Radial profile scale corresponding to the fixed-circle tip radius. */
+function technic_gear_double_bevel_arc_scale( teeth, dz ) =
+	technic_gear_double_bevel_arc_tip_radius( teeth, dz )
+	/ ( technic_gear_tip_diameter( teeth ) / 2 );
+
 /** Single-axial lip height derived proportionally from gear_height. */
 function technic_gear_single_lip_height( gear_height ) = gear_height * ( 0.8 / 3.6 );
 
@@ -1951,6 +1987,162 @@ module technic_gear_single_bevel_cutter(
 }
 
 /**
+ * Provide the exact normal involute tooth crowns in 2D for radial sweeping.
+ * The equations and involute helpers are the same pinned vendor equations used
+ * by technic_gear_normal_tooth_solid(), avoiding an independently tuned tooth
+ * profile.  A very small inward overlap derived from EXTENSION_FOR_DIFFERENCE
+ * keeps the swept crown manifold with the full-height root/filler ring.
+ */
+module technic_gear_normal_tooth_crown_profile_2d( teeth ) {
+	include <lib/gears/gears.scad>;
+
+	// Exact module-1, 20-degree, zero-helix profile equations used by the
+	// pinned vendor spur_gear() call in technic_gear_normal_tooth_solid().
+	// Keeping the equations and vendor involute helpers identical avoids the
+	// repeated 3D projection cost while preserving the same crown geometry.
+	modul = 1;
+	pressure_angle = 20;
+	helix_angle = 0;
+	d = modul * teeth;
+	r = d / 2;
+	alpha_spur = atan( tan( pressure_angle ) / cos( helix_angle ) );
+	db = d * cos( alpha_spur );
+	rb = db / 2;
+	da = d + modul * 2;
+	ra = da / 2;
+	c = teeth < 3 ? 0 : modul / 6;
+	df = d - 2 * ( modul + c );
+	rf = df / 2;
+	rho_ra = acos( rb / ra );
+	rho_r = acos( rb / r );
+	phi_r = grad( tan( rho_r ) - radian( rho_r ) );
+	step = rho_ra / 16;
+	tau = 360 / teeth;
+	tooth_width = ( 180 * ( 1 - clearance ) ) / teeth + 2 * phi_r;
+	crown_overlap = EXTENSION_FOR_DIFFERENCE / 100;
+
+	difference() {
+		rotate( [ 0, 0, -phi_r - 90 * ( 1 - clearance ) / teeth ] ) {
+			union() {
+				for ( rot = [ 0 : tau : 360 ] ) {
+					rotate( rot ) {
+						polygon( concat(
+							[ [ 0, 0 ] ],
+							[ for ( rho = [ 0 : step : rho_ra ] ) polar_to_cartesian( ev( rb, rho ) ) ],
+							[ polar_to_cartesian( ev( rb, rho_ra ) ) ],
+							[ for ( rho = [ rho_ra : -step : 0 ] )
+								polar_to_cartesian( [ ev( rb, rho )[0], tooth_width - ev( rb, rho )[1] ] ) ]
+						) );
+					}
+				}
+			}
+		}
+
+		// Remove the root circle while retaining a tiny positive overlap so the
+		// swept crowns join the independently full-height root/filler ring.
+		circle( r = max( 0, rf - crown_overlap ) );
+	}
+}
+
+/**
+ * Generate one mirrored half of the fixed-circle radial crown continuation.
+ * Every segment endpoint derives only from technic_gear_double_bevel_arc_scale().
+ */
+module technic_gear_double_bevel_radial_side(
+	teeth,
+	tooth_height,
+	upper = true
+) {
+	arc_run = technic_gear_double_bevel_arc_run();
+	segment_height = arc_run / technic_gear_double_bevel_arc_segments;
+	handover_overlap = EXTENSION_FOR_DIFFERENCE / 100;
+
+	module _positive_side() {
+		// Finite overlap at the tangent handover avoids a zero-thickness CSG seam.
+		translate( [ 0, 0, technic_gear_double_bevel_center_half_height - handover_overlap ] ) {
+			linear_extrude( height = handover_overlap * 2 ) {
+				technic_gear_normal_tooth_crown_profile_2d( teeth = teeth );
+			}
+		}
+
+		for ( segment = [ 0 : technic_gear_double_bevel_arc_segments - 1 ] ) {
+			dz0 = segment * segment_height;
+			dz1 = ( segment + 1 ) * segment_height;
+			scale0 = technic_gear_double_bevel_arc_scale( teeth, dz0 );
+			scale1 = technic_gear_double_bevel_arc_scale( teeth, dz1 );
+
+			translate( [ 0, 0, technic_gear_double_bevel_center_half_height + dz0 ] ) {
+				linear_extrude(
+				height = segment_height,
+				scale = scale1 / scale0
+				) {
+					scale( [ scale0, scale0 ] ) {
+						technic_gear_normal_tooth_crown_profile_2d( teeth = teeth );
+					}
+				}
+			}
+		}
+	}
+
+	if ( upper ) {
+		_positive_side();
+	} else {
+		mirror( [ 0, 0, 1 ] ) {
+			_positive_side();
+		}
+	}
+}
+
+/**
+ * Complete positive double-bevel tooth/root solid.
+ *
+ * The full-height root ring is not radially scaled.  The centered normal tooth
+ * owns exactly 2.40 mm before the fixed-circle crown takes over.  Continuation
+ * is generated to the fixed reference face and the actual requested height is
+ * established only by the final symmetric clipping volume.
+ */
+module technic_gear_double_bevel_tooth_solid(
+	teeth,
+	height,
+	bore
+) {
+	tip_radius = technic_gear_tip_diameter( teeth ) / 2;
+	root_diameter = technic_gear_root_diameter( teeth );
+	clip_extension = EXTENSION_FOR_DIFFERENCE / 100;
+
+	intersection() {
+		union() {
+			// Full-height tooth-root/filler ring: never scaled by the radial law.
+			difference() {
+				cylinder( d = root_diameter, h = height, center = true );
+				cylinder( d = bore - ( EXTENSION_FOR_DIFFERENCE / 2 ), h = height + EXTENSION_FOR_DIFFERENCE, center = true );
+			}
+
+			// Short centered normal involute tooth: fixed 2.40 mm total height.
+			technic_gear_normal_tooth_solid(
+				teeth = teeth,
+				height = 2 * technic_gear_double_bevel_center_half_height,
+				bore_diameter = bore
+			);
+
+			technic_gear_double_bevel_radial_side(
+				teeth = teeth, tooth_height = height, upper = true
+			);
+			technic_gear_double_bevel_radial_side(
+				teeth = teeth, tooth_height = height, upper = false
+			);
+		}
+
+		// Horizontal top/bottom clipping plus the normal un-beveled tip radius.
+		cylinder(
+			r = tip_radius + clip_extension,
+			h = height,
+			center = true
+		);
+	}
+}
+
+/**
  * Generate the symmetric two-face bevel cutter for normal double-form teeth.
  *
  * Each exposed face reuses the approved WP03B single-face cutter only over
@@ -2044,18 +2236,11 @@ module _technic_gear_double_sided_legacy(
 			}
 
 			if ( bevel == "double" ) {
-				difference() {
-					technic_gear_normal_tooth_solid(
-						teeth = teeth,
-						height = desired_gear_tooth_thickness,
-						bore_diameter = tooth_bore_diameter
-					);
-
-					technic_gear_double_bevel_cutter(
-						teeth = teeth,
-						height = desired_gear_tooth_thickness
-					);
-				}
+				technic_gear_double_bevel_tooth_solid(
+					teeth = teeth,
+					height = desired_gear_tooth_thickness,
+					bore = tooth_bore_diameter
+				);
 			} else {
 				technic_gear_normal_tooth_solid(
 					teeth = teeth,
