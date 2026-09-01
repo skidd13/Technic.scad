@@ -872,6 +872,120 @@ function technic_gear_double_tooth_section_height( gear_height, resolved_body_to
 			? gear_height
 			: assert( false, str( "invalid resolved body topology: ", resolved_body_topology ) );
 
+/** Millimetres per official LDraw unit. */
+technic_ldraw_unit_in_mm = 0.4;
+
+/**
+ * WP10 fixed outer clutch-interface reference.
+ * The outer engagement geometry is the functional clutch datum; the inner
+ * boundary is clearance only and may grow only to accommodate the selected
+ * center connector.
+ */
+technic_gear_clutch_reference_half_height_lu = 10;
+technic_gear_clutch_reference_start_z_lu = 2;
+technic_gear_clutch_inner_clearance_radius_lu = 9;
+technic_gear_clutch_outer_radius_lu = 14.7171;
+technic_gear_clutch_key_inner_radius_lu = 13.218;
+technic_gear_clutch_key_outer_base_radius_lu = 14.6183;
+technic_gear_clutch_key_half_width_lu = 1.5;
+technic_gear_clutch_key_narrow_inner_radius_lu = 13.718;
+technic_gear_clutch_key_narrow_outer_radius_lu = 14.6842;
+technic_gear_clutch_key_tip_half_width_lu = 0.5;
+technic_gear_clutch_key_broad_end_z_lu = 8.4;
+technic_gear_clutch_key_narrow_z_lu = 9.4;
+technic_gear_clutch_key_narrow_end_z_lu = 9.7865;
+technic_gear_clutch_profile_slice_thickness = EXTENSION_FOR_DIFFERENCE / 100;
+
+function technic_gear_clutch_face_count( secondary_feature ) =
+	secondary_feature == "clutch_single" ? 1 :
+	secondary_feature == "clutch_dual" ? 2 : 0;
+
+function technic_gear_clutch_interface_depth( gear_height ) =
+	gear_height
+	* ( technic_gear_clutch_reference_half_height_lu - technic_gear_clutch_reference_start_z_lu )
+	/ ( 2 * technic_gear_clutch_reference_half_height_lu );
+
+function technic_gear_clutch_interface_radius( teeth, resolved_body_topology ) =
+	technic_gear_clutch_outer_radius_lu * technic_ldraw_unit_in_mm;
+
+/**
+ * Circular center-side clearance only.  It does not define the clutch profile.
+ * The pin wall is slightly larger than the 9-LDU reference floor, so pin
+ * centers derive the larger radius instead of changing the outer keys.
+ */
+function technic_gear_clutch_inner_clearance_radius( center ) =
+	max(
+		technic_gear_clutch_inner_clearance_radius_lu * technic_ldraw_unit_in_mm,
+		center == "pin"
+			? technic_pin_connector_outer_diameter / 2
+			: ( technic_axle_spline_width + 2 * technic_pin_connector_shoulder_wall_thickness ) / 2
+	);
+
+/**
+ * Deep/start-plane profile of one modern outer clutch key.
+ * The official 18946/81346 interface is a 3-LDU-wide rectangular key at the
+ * 2-LDU recess start.  Its faceward narrowing is generated separately in Z;
+ * do not encode that axial taper by distorting this XY profile.
+ */
+function technic_gear_clutch_profile_points( teeth, gear_height, resolved_body_topology ) =
+	let(
+		key_inner_radius = technic_gear_clutch_key_inner_radius_lu * technic_ldraw_unit_in_mm,
+		key_outer_radius = technic_gear_clutch_key_outer_base_radius_lu * technic_ldraw_unit_in_mm,
+		key_half_width = technic_gear_clutch_key_half_width_lu * technic_ldraw_unit_in_mm
+	)
+	[
+		[ key_inner_radius, -key_half_width ],
+		[ key_outer_radius, -key_half_width ],
+		[ key_outer_radius, key_half_width ],
+		[ key_inner_radius, key_half_width ]
+	];
+
+/** Faceward narrowed section of the same fixed outer key. */
+function technic_gear_clutch_narrow_profile_points() =
+	let(
+		inner_radius = technic_gear_clutch_key_narrow_inner_radius_lu * technic_ldraw_unit_in_mm,
+		outer_radius = technic_gear_clutch_key_narrow_outer_radius_lu * technic_ldraw_unit_in_mm,
+		half_width = technic_gear_clutch_key_tip_half_width_lu * technic_ldraw_unit_in_mm
+	)
+	[
+		[ inner_radius, -half_width ],
+		[ outer_radius, -half_width ],
+		[ outer_radius, half_width ],
+		[ inner_radius, half_width ]
+	];
+
+/** Map an official face-side axial LDU station into the local cutout Z axis. */
+function technic_gear_clutch_local_z( depth, axial_lu ) =
+	-depth / 2
+	+ depth
+		* ( axial_lu - technic_gear_clutch_reference_start_z_lu )
+		/ ( technic_gear_clutch_reference_half_height_lu - technic_gear_clutch_reference_start_z_lu );
+
+/** Center positions of the identical face cutouts. */
+function technic_gear_clutch_face_z_positions( secondary_feature, gear_height, depth ) =
+	secondary_feature == "clutch_single"
+		? [ ( gear_height - depth ) / 2 ]
+		: secondary_feature == "clutch_dual"
+			? [ -( gear_height - depth ) / 2, ( gear_height - depth ) / 2 ]
+			: [];
+
+/**
+ * The current reusable clutch face requires full-height solid material.
+ * Hollow/reduced bodies need separate face-material/body adapters, not a
+ * distorted clutch.  Radial fit is derived from the fixed clutch envelope.
+ */
+function technic_gear_clutch_interface_fits( teeth, center, resolved_body_topology ) =
+	let(
+		interface_radius = technic_gear_clutch_interface_radius( teeth, resolved_body_topology ),
+		root_radius = technic_gear_double_rim_outer_diameter( teeth ) / 2,
+		inner_clearance = technic_gear_clutch_inner_clearance_radius( center ),
+		key_inner_radius = technic_gear_clutch_key_inner_radius_lu * technic_ldraw_unit_in_mm,
+		minimum_wall = technic_pin_connector_shoulder_wall_thickness
+	)
+	resolved_body_topology == "solid"
+	&& root_radius - interface_radius >= minimum_wall
+	&& key_inner_radius - inner_clearance >= minimum_wall;
+
 /**
  * WP09 reinforced/stepped-tooth reference geometry from LDraw tooth8a.dat.
  *
@@ -1603,6 +1717,90 @@ module technic_gear_secondary_pins_negative( teeth, secondary_feature, height ) 
 	}
 }
 
+/** Thin profile slice used only to hull the fixed outer-key taper. */
+module _technic_gear_clutch_profile_slice( points, z ) {
+	translate( [ 0, 0, z ] )
+		linear_extrude( height = technic_gear_clutch_profile_slice_thickness, center = true )
+			polygon( points = points );
+}
+
+/**
+ * One fixed outer engagement key used as a mask inside the annular recess.
+ * Radial/tangential dimensions remain fixed LEGO/LDraw dimensions; only the
+ * axial stations scale with the requested gear height through `depth`.
+ */
+module _technic_gear_clutch_key_mask( profile_points, depth ) {
+	narrow_points = technic_gear_clutch_narrow_profile_points();
+	start_z = -depth / 2 - ( EXTENSION_FOR_DIFFERENCE / 2 );
+	broad_end_z = technic_gear_clutch_local_z( depth, technic_gear_clutch_key_broad_end_z_lu );
+	narrow_z = technic_gear_clutch_local_z( depth, technic_gear_clutch_key_narrow_z_lu );
+	narrow_end_z = technic_gear_clutch_local_z( depth, technic_gear_clutch_key_narrow_end_z_lu );
+
+	// Full-width engagement wall through the source-defined broad section.
+	translate( [ 0, 0, ( start_z + broad_end_z ) / 2 ] )
+		linear_extrude( height = broad_end_z - start_z + technic_gear_clutch_profile_slice_thickness, center = true )
+			polygon( points = profile_points );
+
+	// Source-derived faceward narrowing of the functional outer key.
+	hull() {
+		_technic_gear_clutch_profile_slice( profile_points, broad_end_z );
+		_technic_gear_clutch_profile_slice( narrow_points, narrow_z );
+	}
+
+	translate( [ 0, 0, ( narrow_z + narrow_end_z ) / 2 ] )
+		linear_extrude( height = narrow_end_z - narrow_z + technic_gear_clutch_profile_slice_thickness, center = true )
+			polygon( points = narrow_points );
+}
+
+/**
+ * One face's negative clutch recess.  The annular recess is removed everywhere
+ * except the four repeated outer engagement keys.  The inner circle is only
+ * center-side clearance.
+ */
+module technic_gear_clutch_interface_cutout(
+	profile_points, inner_clearance_radius, interface_radius, depth
+) {
+	difference() {
+		linear_extrude( height = depth + EXTENSION_FOR_DIFFERENCE, center = true ) {
+			difference() {
+				circle( r = interface_radius );
+				circle( r = inner_clearance_radius );
+			}
+		}
+
+		for ( angle = [ 0 : 90 : 270 ] ) {
+			rotate( [ 0, 0, angle ] )
+				_technic_gear_clutch_key_mask( profile_points = profile_points, depth = depth );
+		}
+	}
+}
+
+/** Place one or two identical face recesses at the derived axial stations. */
+module technic_gear_place_clutch_interfaces(
+	face_z_positions, profile_points, inner_clearance_radius, interface_radius, depth
+) {
+	for ( face_z = face_z_positions ) {
+		translate( [ 0, 0, face_z ] ) {
+			if ( face_z < 0 ) {
+				mirror( [ 0, 0, 1 ] )
+					technic_gear_clutch_interface_cutout(
+						profile_points = profile_points,
+						inner_clearance_radius = inner_clearance_radius,
+						interface_radius = interface_radius,
+						depth = depth
+					);
+			} else {
+				technic_gear_clutch_interface_cutout(
+					profile_points = profile_points,
+					inner_clearance_radius = inner_clearance_radius,
+					interface_radius = interface_radius,
+					depth = depth
+				);
+			}
+		}
+	}
+}
+
 function _technic_gear_station_coordinate_seen_before( records, index, prior = 0 ) =
 	prior >= index ? false :
 	( records[prior][0] == records[index][0] && records[prior][1] == records[index][1] ) ? true :
@@ -1895,8 +2093,14 @@ module technic_gear(
 		teeth, effective_height, effective_tooth_sections, resolved_body_topology
 	);
 	effective_center = center;
+	clutch_requested = axial_form == "double"
+		&& ( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" );
+	clutch_fits = clutch_requested
+		? technic_gear_clutch_interface_fits( teeth, center, resolved_body_topology ) : false;
 	effective_secondary_feature = axial_form == "double"
-		? technic_gear_secondary_effective_feature( teeth, secondary_feature )
+		? ( clutch_requested
+			? ( clutch_fits ? secondary_feature : "none" )
+			: technic_gear_secondary_effective_feature( teeth, secondary_feature ) )
 		: "none";
 	body_root_diameter = axial_form == "double" ? technic_gear_double_rim_outer_diameter( teeth ) : 0;
 	body_inner_diameter = axial_form == "double" ? technic_gear_double_rim_inner_diameter( teeth, resolved_body_topology ) : 0;
@@ -1917,8 +2121,9 @@ module technic_gear(
 		: body_mode == "hollow" ? "missing" : ( body_mode == effective_body_mode ? "supported" : "fallback" );
 	center_state = "supported";
 	secondary_state = axial_form == "double"
-		? ( secondary_feature == effective_secondary_feature ? "supported" :
-			_technic_gear_value_in( secondary_feature, [ "none", "pin", "axle", "pin+axle" ] ) ? "partial" : "fallback" )
+		? ( clutch_requested
+			? ( clutch_fits ? "supported" : "missing" )
+			: ( secondary_feature == effective_secondary_feature ? "supported" : "partial" ) )
 		: ( secondary_feature == "none" ? "supported" : "fallback" );
 	hollow_effective = body_mode == "hollow" && hollow_valid ? hollow_structure : body_mode == "hollow" ? "none" : "inactive";
 	hollow_state = body_mode == "hollow" ? ( hollow_valid ? "supported" : "missing" ) : "derived";
@@ -1948,9 +2153,10 @@ module technic_gear(
 	_technic_gear_support_record( "center", center, effective_center, center_state, axial_form == "double" && center == "pin" ? "cross-interface-reuse" : "legacy-path", debug );
 	_technic_gear_support_record(
 		"secondary_feature", secondary_feature, effective_secondary_feature, secondary_state,
-		secondary_state == "supported" ? ( axial_form == "double" ? "wp06c-capacity" : "legacy-none" ) :
-		secondary_state == "partial" ? "geometry-capacity" :
-		( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" ? "clutch-not-implemented" : "secondary-feature-not-implemented" ),
+		secondary_state == "supported"
+			? ( clutch_requested ? "wp10-fixed-outer-clutch-interface" : ( axial_form == "double" ? "wp06c-capacity" : "legacy-none" ) )
+			: secondary_state == "partial" ? "geometry-capacity"
+			: clutch_requested ? "clutch-interface-does-not-fit" : "secondary-feature-not-implemented",
 		debug
 	);
 
@@ -1979,23 +2185,39 @@ module technic_gear(
 			"|nodes=", len( hollow_nodes ),
 			"|edges=", len( hollow_edges )
 		) );
+
+		if ( clutch_requested ) {
+			clutch_depth = technic_gear_clutch_interface_depth( effective_height );
+			echo( str(
+				"TECHNIC_GEAR_CLUTCH|fits=", clutch_fits,
+				"|faces=", technic_gear_clutch_face_count( secondary_feature ),
+				"|depth=", clutch_depth,
+				"|outer_radius=", technic_gear_clutch_interface_radius( teeth, resolved_body_topology ),
+				"|inner_clearance=", technic_gear_clutch_inner_clearance_radius( center ),
+				"|z=", technic_gear_clutch_face_z_positions( secondary_feature, effective_height, clutch_depth )
+			) );
+		}
 	}
 
 	assert( technic_gear_axial_dimensions_valid( axial_form, effective_height, axial_form == "double" ? resolved_body_topology : undef ), str( "gear_height produces invalid axial dimensions: ", effective_height ) );
 	assert( technic_gear_center_radial_clearance_valid( effective_center, axial_form, teeth ), str( "center connector lacks radial clearance: center=", effective_center, ", axial_form=", axial_form, ", teeth=", teeth ) );
 
 	if ( axial_form == "double" ) {
-		_technic_gear_double_sided_legacy(
-			teeth = teeth, gear_height = effective_height, center = effective_center,
-			body_mode = effective_body_mode, secondary_feature = effective_secondary_feature,
-			resolved_body_topology = resolved_body_topology,
-			resolved_tooth_height = resolved_tooth_height,
-			tooth_sections = effective_tooth_sections, tooth_section_records = tooth_section_records,
-			bevel = effective_bevel,
-			body_root_diameter = body_root_diameter, body_inner_diameter = body_inner_diameter,
-			body_hub_diameter = body_hub_diameter, hollow_structure = hollow_structure,
-			hollow_member_width = hollow_member_width, hollow_nodes = hollow_nodes, hollow_edges = hollow_edges
-		);
+		// A valid-but-unimplemented clutch request must remain visibly missing.
+		// Do not substitute either an unclutched double gear or the single-form path.
+		if ( !( clutch_requested && !clutch_fits ) ) {
+			_technic_gear_double_sided_legacy(
+				teeth = teeth, gear_height = effective_height, center = effective_center,
+				body_mode = effective_body_mode, secondary_feature = effective_secondary_feature,
+				resolved_body_topology = resolved_body_topology,
+				resolved_tooth_height = resolved_tooth_height,
+				tooth_sections = effective_tooth_sections, tooth_section_records = tooth_section_records,
+				bevel = effective_bevel,
+				body_root_diameter = body_root_diameter, body_inner_diameter = body_inner_diameter,
+				body_hub_diameter = body_hub_diameter, hollow_structure = hollow_structure,
+				hollow_member_width = hollow_member_width, hollow_nodes = hollow_nodes, hollow_edges = hollow_edges
+			);
+		}
 	} else {
 		_technic_gear_single_sided_legacy( teeth = teeth, bevel = effective_bevel == "single", center_hole = effective_center, gear_height = effective_height, body_mode = effective_body_mode );
 	}
@@ -2389,6 +2611,22 @@ module _technic_gear_double_sided_legacy(
 			records = axle_records, height = desired_gear_axle_reinforcement_thickness,
 			operand = "negative"
 		);
+
+		if ( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" ) {
+			clutch_depth = technic_gear_clutch_interface_depth( gear_height );
+			clutch_radius = technic_gear_clutch_interface_radius( teeth, resolved_body_topology );
+			clutch_inner_clearance = technic_gear_clutch_inner_clearance_radius( center );
+			clutch_profile = technic_gear_clutch_profile_points( teeth, gear_height, resolved_body_topology );
+			clutch_face_z = technic_gear_clutch_face_z_positions( secondary_feature, gear_height, clutch_depth );
+
+			technic_gear_place_clutch_interfaces(
+				face_z_positions = clutch_face_z,
+				profile_points = clutch_profile,
+				inner_clearance_radius = clutch_inner_clearance,
+				interface_radius = clutch_radius,
+				depth = clutch_depth
+			);
+		}
 
 		// Pin center remains on the accepted WP04 path and is not an axle record.
 		if ( center == "pin" ) {
