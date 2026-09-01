@@ -819,6 +819,86 @@ module technic_elbow(
 	}
 }
 
+/**
+ * Return the normal overall height for the selected gear axial construction.
+ * `gear_height = undef` is resolved through this function by technic_gear().
+ */
+function technic_gear_normal_height( axial_form ) =
+	axial_form == "double" ? technic_gear_axle_reinforcement_thickness :
+	axial_form == "single" ? ( technic_gear_12_tooth_lip_thickness + technic_gear_12_tooth_base_thickness + technic_gear_12_tooth_tooth_thickness ) :
+	assert( false, str( "invalid axial_form: ", axial_form ) );
+
+function _technic_gear_value_in( value, values ) = len( [ for ( candidate = values ) if ( value == candidate ) candidate ] ) > 0;
+
+module _technic_gear_support_record( feature, requested, effective, state, reason, debug = false ) {
+	if ( debug || state == "partial" || state == "missing" || state == "fallback" ) {
+		echo( str(
+			"TECHNIC_GEAR_SUPPORT|feature=", feature,
+			"|requested=", requested,
+			"|effective=", effective,
+			"|state=", state,
+			"|reason=", reason
+		) );
+	}
+}
+
+module technic_gear(
+	axial_form = "double",
+	teeth = 24,
+	gear_height = undef,
+	tooth_sections = "normal",
+	bevel = "none",
+	body_mode = "reduced",
+	hollow_structure = undef,
+	center = "axle",
+	secondary_feature = "pin+axle",
+	debug = false
+) {
+	assert( _technic_gear_value_in( axial_form, [ "single", "double" ] ), str( "invalid axial_form: ", axial_form ) );
+	assert( is_num( teeth ) && teeth > 0 && teeth == floor( teeth ), str( "teeth must be a positive integer: ", teeth ) );
+	assert( is_undef( gear_height ) || ( is_num( gear_height ) && gear_height > 0 ), str( "gear_height must be positive when specified: ", gear_height ) );
+	assert( _technic_gear_value_in( tooth_sections, [ "normal", "stepped" ] ), str( "invalid tooth_sections: ", tooth_sections ) );
+	assert( _technic_gear_value_in( bevel, [ "none", "single", "double" ] ), str( "invalid bevel: ", bevel ) );
+	assert( _technic_gear_value_in( body_mode, [ "filled", "reduced", "hollow" ] ), str( "invalid body_mode: ", body_mode ) );
+	assert( is_undef( hollow_structure ) || _technic_gear_value_in( hollow_structure, [ "cross", "frame", "ring" ] ), str( "invalid hollow_structure: ", hollow_structure ) );
+	assert( _technic_gear_value_in( center, [ "axle", "pin" ] ), str( "invalid center: ", center ) );
+	assert( _technic_gear_value_in( secondary_feature, [ "none", "pin", "axle", "pin+axle", "clutch_single", "clutch_dual" ] ), str( "invalid secondary_feature: ", secondary_feature ) );
+
+	normal_height = technic_gear_normal_height( axial_form );
+	requested_height = is_undef( gear_height ) ? normal_height : gear_height;
+	effective_height = axial_form == "double" || requested_height == normal_height ? requested_height : normal_height;
+	effective_tooth_sections = "normal";
+	effective_bevel = axial_form == "single" ? ( bevel == "double" ? "single" : bevel ) : "none";
+	effective_body_mode = axial_form == "double" ? "reduced" : "filled";
+	effective_center = axial_form == "single" ? center : "axle";
+	effective_secondary_feature = axial_form == "double" ? "pin+axle" : "none";
+	height_state = effective_height == requested_height ? "supported" : "fallback";
+	tooth_sections_state = tooth_sections == "normal" ? "supported" : "fallback";
+	bevel_state = bevel == effective_bevel ? "supported" : "fallback";
+	body_mode_state = body_mode == effective_body_mode ? "supported" : "fallback";
+	center_state = center == effective_center ? "supported" : "fallback";
+	secondary_state = secondary_feature == effective_secondary_feature ? "supported" : "fallback";
+	hollow_effective = body_mode == "hollow" ? hollow_structure : "inactive";
+	hollow_state = body_mode == "hollow" ? "missing" : "derived";
+	hollow_reason = body_mode == "hollow" ? "hollow-not-implemented" : "body-not-hollow";
+
+	_technic_gear_support_record( "axial_form", axial_form, axial_form, "supported", "legacy-path", debug );
+	_technic_gear_support_record( "teeth", teeth, teeth, "supported", "legacy-path", debug );
+	_technic_gear_support_record( "gear_height", requested_height, effective_height, height_state, height_state == "supported" ? ( is_undef( gear_height ) ? "normal-default" : "legacy-height" ) : "single-custom-height-not-implemented", debug );
+	_technic_gear_support_record( "tooth_sections", tooth_sections, effective_tooth_sections, tooth_sections_state, tooth_sections_state == "supported" ? "legacy-normal" : "stepped-not-implemented", debug );
+	_technic_gear_support_record( "bevel", bevel, effective_bevel, bevel_state, bevel_state == "supported" ? "legacy-path" : "bevel-not-implemented", debug );
+	_technic_gear_support_record( "body_mode", body_mode, effective_body_mode, body_mode_state, body_mode_state == "supported" ? "legacy-path" : "body-mode-not-implemented", debug );
+	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
+	_technic_gear_support_record( "center", center, effective_center, center_state, center_state == "supported" ? "legacy-path" : "double-pin-center-not-implemented", debug );
+	_technic_gear_support_record( "secondary_feature", secondary_feature, effective_secondary_feature, secondary_state, secondary_state == "supported" ? ( axial_form == "double" ? "legacy-fit-derived" : "legacy-none" ) : ( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" ? "clutch-not-implemented" : "secondary-feature-not-implemented" ), debug );
+
+	if ( axial_form == "double" ) {
+		_technic_gear_double_sided_legacy( teeth = teeth, width = effective_height / technic_gear_normal_height( "double" ) );
+	} else {
+		_technic_gear_single_sided_legacy( teeth = teeth, bevel = effective_bevel == "single", center_hole = effective_center );
+	}
+}
+
 /***
  * @function technic_gear_double_sided();
  * Generate a Technic-compatible double-sided spur gear.
@@ -837,6 +917,18 @@ module technic_elbow(
  * @param width *int* In multiples of the original gear width, how wide should it be? e.g., a width of 3 would generate a single gear with the same total width as three gears set side-by-side.
  */
 module technic_gear_double_sided(
+	teeth = 24,
+	width = 1
+) {
+	technic_gear(
+		axial_form = "double", teeth = teeth,
+		gear_height = width * technic_gear_normal_height( "double" ),
+		tooth_sections = "normal", bevel = "none", body_mode = "reduced",
+		hollow_structure = undef, center = "axle", secondary_feature = "pin+axle"
+	);
+}
+
+module _technic_gear_double_sided_legacy(
 	teeth = 24,
 	width = 1
 ) {
@@ -1103,6 +1195,14 @@ module technic_gear_double_sided(
  * @param center_hole *string* What connector should the center hole be compatible with? Supported values are "axle" and "pin".
  */
 module technic_gear_single_sided( teeth = 12, bevel = true, center_hole = "axle" ) {
+	technic_gear(
+		axial_form = "single", teeth = teeth, gear_height = technic_gear_normal_height( "single" ),
+		tooth_sections = "normal", bevel = bevel ? "single" : "none", body_mode = "filled",
+		hollow_structure = undef, center = center_hole, secondary_feature = "none"
+	);
+}
+
+module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole = "axle" ) {
 	// Gears appear to be one inch wide for every 24 teeth they have.
 	gear_diameter = ( teeth / 12 ) * technic_gear_12_tooth_gear_diameter;
 
