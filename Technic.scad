@@ -1662,33 +1662,15 @@ function technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, s
                 shell_index
             );
 function technic_gear_reduced_ring_cellular_outer_radius( shell_radius, cell_count, shell_index ) =
-    shell_index == 0
-        ? technic_gear_reduced_ring_cell_outer_radius()
-        : let(
-            circumferential = max(
-                technic_gear_reduced_ring_cell_outer_radius(),
-                shell_radius * sin( 180 / cell_count )
-                + technic_gear_reduced_ring_cellular_overlap() / 2
-            ),
-            core_bridge = shell_index == 1
-                ? sqrt(
-                    pow( shell_radius, 2 )
-                    + pow( technic_gear_reduced_ring_cell_center_radius(), 2 )
-                    - 2 * shell_radius
-                      * technic_gear_reduced_ring_cell_center_radius()
-                      * cos( 180 / cell_count )
-                  )
-                  - technic_gear_reduced_ring_cell_outer_radius()
-                  + technic_gear_reduced_ring_cellular_overlap()
-                : 0
-          )
-          max( circumferential, core_bridge );
+    // CELLULAR-I11: the full-height circular stiffener is the same physical
+    // 4019 collar at every scale.  Continuous load transfer belongs to the
+    // recessed reduced web underneath, so scalable collars must not inflate
+    // until they blanket the recess.
+    technic_gear_reduced_ring_cell_outer_radius();
 function technic_gear_reduced_ring_cellular_hole_radius( shell_index, outer_radius ) =
-    shell_index == 0
-        ? technic_gear_reduced_ring_cell_inner_radius()
-        : technic_gear_reduced_ring_cell_outer_radius();
+    technic_gear_reduced_ring_cell_inner_radius();
 
-/** CELLULAR-I10 source-faithful reduced web + clean cellular reliefs.
+/** CELLULAR-I11 recessed-web + source-sized circular stiffeners.
  *
  * Positive cellular support and negative weight relief are deliberately
  * separated.  The collar lattice is clipped to the reserved tooth-rim inner
@@ -3175,7 +3157,7 @@ module technic_gear(
 		"reduced_pattern", reduced_pattern,
 		body_mode == "reduced" ? reduced_pattern : "inactive",
 		body_mode == "reduced" ? "supported" : "derived",
-		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-circle-lattice-i10-webbed-rim-reserved" : "classic-reduced-pattern",
+		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-circle-lattice-i11-recessed-web-source-collars" : "classic-reduced-pattern",
 		debug
 	);
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
