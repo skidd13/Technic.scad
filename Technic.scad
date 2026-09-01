@@ -1627,10 +1627,10 @@ function technic_gear_reduced_ring_interlock_positive_clip_radius( inner_diamete
  */
 function technic_gear_reduced_ring_cellular_row_radius_increment() =
     // I15: each newly added radial row grows the relief diameter by one
-    // sixteenth of the source 4019 wall thickness.  Radius therefore grows by
-    // one thirty-second wall per row: small enough to remain visually gentle,
-    // but independent of total gear size / shell count.
-    technic_gear_reduced_ring_cell_wall_thickness() / 32;
+    // eighth of the source 4019 wall thickness. Radius therefore grows by
+    // one sixteenth wall per row: visibly stepped in top view while remaining
+    // independent of total gear size / shell count.
+    technic_gear_reduced_ring_cell_wall_thickness() / 16;
 function technic_gear_reduced_ring_cellular_hole_radius_for_shell( shell_index ) =
     technic_gear_reduced_ring_cell_inner_radius()
     + shell_index * technic_gear_reduced_ring_cellular_row_radius_increment();
@@ -1716,7 +1716,7 @@ function technic_gear_reduced_ring_cellular_hole_radius( inner_diameter, shell_i
         technic_gear_reduced_ring_cellular_hole_radius_for_shell( shell_index )
     );
 
-/** CELLULAR-I15 golf-packed recessed-web + row-wise growing circular relief.
+/** CELLULAR-I16 golf-packed recessed-web + row-wise growing circular relief.
  *
  * Positive cellular support and negative weight relief are deliberately
  * separated.  The collar lattice is clipped to the reserved tooth-rim inner
@@ -3203,7 +3203,7 @@ module technic_gear(
 		"reduced_pattern", reduced_pattern,
 		body_mode == "reduced" ? reduced_pattern : "inactive",
 		body_mode == "reduced" ? "supported" : "derived",
-		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-i15-row-wise-growing-golf-relief" : "classic-reduced-pattern",
+		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-i16-row-wise-growing-golf-relief" : "classic-reduced-pattern",
 		debug
 	);
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
