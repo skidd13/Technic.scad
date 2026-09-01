@@ -852,10 +852,13 @@ function technic_gear_normal_height( axial_form ) =
 	assert( false, str( "invalid axial_form: ", axial_form ) );
 
 /** Double-axial secondary connector-wall height derived from gear_height. */
-function technic_gear_double_secondary_wall_height( gear_height ) = gear_height - 1.63;
+function technic_gear_double_secondary_wall_height( gear_height ) =
+	gear_height
+	- ( technic_gear_axle_reinforcement_thickness - technic_gear_pin_hole_thickness );
 
-/** Established fixed axial reduction applied only to genuinely reduced double teeth. */
-technic_gear_double_reduced_tooth_axial_offset = 4.03;
+/** Axial reduction from the normal full-height reinforcement to normal tooth thickness. */
+technic_gear_double_reduced_tooth_axial_offset =
+	technic_gear_axle_reinforcement_thickness - technic_gear_tooth_thickness;
 
 /** Reduced-only double normal tooth-section height. */
 function technic_gear_double_reduced_tooth_section_height( gear_height ) =
@@ -870,7 +873,11 @@ function technic_gear_double_tooth_section_height( gear_height, resolved_body_to
 			: assert( false, str( "invalid resolved body topology: ", resolved_body_topology ) );
 
 /** Double-axial reduced continuous-body height derived from gear_height. */
-function technic_gear_double_reduced_body_height( gear_height ) = gear_height - 6.43;
+technic_gear_double_reduced_body_axial_offset =
+	technic_gear_axle_reinforcement_thickness - technic_gear_wheel_thickness;
+
+function technic_gear_double_reduced_body_height( gear_height ) =
+	gear_height - technic_gear_double_reduced_body_axial_offset;
 
 /**
  * Reference axial proportions for normal double-bevel teeth.
@@ -1169,6 +1176,196 @@ function technic_gear_double_body_topology( teeth, body_mode ) =
 		&& technic_gear_axle_support_fits( teeth, [ 0, 0 ], 0 )
 		? "reduced" : "solid";
 
+/**
+ * Source-derived hollow-body proportions from the official LDraw 32269 hub
+ * geometry.  The quarter-body source uses radius 17 for the body boundary and
+ * 11.998 for the cardinal opening boundary.  Store the source coordinates once
+ * and derive the dimensionless ratio used by all hollow body sizes.
+ */
+technic_gear_hollow_reference_body_radius_units = 17;
+technic_gear_hollow_reference_opening_radius_units = 11.998;
+technic_gear_hollow_reference_opening_ratio =
+	technic_gear_hollow_reference_opening_radius_units
+	/ technic_gear_hollow_reference_body_radius_units;
+
+/** WP08 inner boundary of the tooth-support rim for each double topology. */
+function technic_gear_double_rim_inner_diameter( teeth, resolved_body_topology ) =
+	resolved_body_topology == "solid" ? 0 :
+	resolved_body_topology == "reduced"
+		? technic_gear_classic_rim_inner_diameter( teeth ) :
+	resolved_body_topology == "hollow"
+		? technic_gear_root_diameter( teeth ) * technic_gear_hollow_reference_opening_ratio
+		: assert( false, str( "invalid resolved body topology: ", resolved_body_topology ) );
+
+/** WP08 double-body hub envelope derived from the selected center interface. */
+function technic_gear_double_hub_diameter( teeth, center, resolved_body_topology ) =
+	let(
+		// Axle hubs need only the spline envelope plus the existing shoulder wall.
+		// Pin centers retain the existing pin-connector outer diameter.
+		center_wall_diameter = center == "pin"
+			? technic_pin_connector_outer_diameter
+			: technic_axle_spline_width
+				+ ( 2 * technic_pin_connector_shoulder_wall_thickness ),
+		envelope_diameter = resolved_body_topology == "solid"
+			? technic_gear_root_diameter( teeth )
+			: technic_gear_double_rim_inner_diameter( teeth, resolved_body_topology )
+	)
+	min( center_wall_diameter, envelope_diameter );
+
+/** WP08 outer body boundary: the common tooth-root envelope. */
+function technic_gear_double_rim_outer_diameter( teeth ) = technic_gear_root_diameter( teeth );
+
+/** Base structural-member width derived from existing Technic wall/web dimensions. */
+function _technic_gear_hollow_base_member_width() =
+	max(
+		2 * technic_beam_webbing_thickness,
+		technic_gear_pin_hole_outer_diameter - technic_hole_diameter
+	);
+
+/** Minimum real radial opening, derived from the existing Technic shoulder wall. */
+technic_gear_hollow_minimum_open_span = technic_pin_connector_shoulder_wall_thickness;
+
+/** Whether a real open hollow span exists between the derived hub and rim. */
+function technic_gear_hollow_structure_valid( teeth, hollow_structure, center, secondary_feature ) =
+	let(
+		hub_diameter = technic_gear_double_hub_diameter( teeth, center, "hollow" ),
+		rim_inner_diameter = technic_gear_double_rim_inner_diameter( teeth, "hollow" ),
+		radial_open_span = ( rim_inner_diameter - hub_diameter ) / 2
+	)
+	_technic_gear_value_in( hollow_structure, [ "cross", "frame", "ring" ] )
+	&& rim_inner_diameter > hub_diameter
+	&& radial_open_span >= technic_gear_hollow_minimum_open_span;
+
+/** WP08 member width; topology fit is validated separately before geometry. */
+function technic_gear_hollow_member_width( teeth, hollow_structure, center, secondary_feature ) =
+	_technic_gear_hollow_base_member_width();
+
+/**
+ * WP08 structure-node records. First two values are XY; third is node role.
+ * Base frame nodes use the 8 mm Technic lattice whenever the envelope permits.
+ */
+function technic_gear_hollow_structure_nodes( teeth, hollow_structure, center, secondary_feature ) =
+	let(
+		effective_secondary = technic_gear_secondary_effective_feature( teeth, secondary_feature ),
+		hub_diameter = technic_gear_double_hub_diameter( teeth, center, "hollow" ),
+		rim_inner_diameter = technic_gear_double_rim_inner_diameter( teeth, "hollow" ),
+		member_width = technic_gear_hollow_member_width( teeth, hollow_structure, center, effective_secondary ),
+		hub_radius = hub_diameter / 2,
+		// Penetrate the rim by half an existing web thickness.  A merely tangent
+		// member/rim contact is visually connected but is not a robust manifold.
+		connection_overlap = technic_beam_webbing_thickness / 2,
+		rim_connection_radius = ( rim_inner_diameter / 2 ) - ( member_width / 2 ) + connection_overlap,
+		mid_radius = ( hub_radius + rim_connection_radius ) / 2,
+		frame_half_span = min(
+			technic_gear_secondary_lattice_half_pitch,
+			rim_connection_radius / sqrt( 2 )
+		),
+		base_nodes = hollow_structure == "cross" ? [
+			[ 0, 0, "hub" ],
+			[ rim_connection_radius, 0, "structure" ],
+			[ -rim_connection_radius, 0, "structure" ],
+			[ 0, rim_connection_radius, "structure" ],
+			[ 0, -rim_connection_radius, "structure" ]
+		] : hollow_structure == "frame" ? [
+			[ 0, 0, "hub" ],
+			[ frame_half_span, frame_half_span, "structure" ],
+			[ -frame_half_span, frame_half_span, "structure" ],
+			[ -frame_half_span, -frame_half_span, "structure" ],
+			[ frame_half_span, -frame_half_span, "structure" ],
+			[ rim_connection_radius, 0, "structure" ],
+			[ -rim_connection_radius, 0, "structure" ],
+			[ 0, rim_connection_radius, "structure" ],
+			[ 0, -rim_connection_radius, "structure" ]
+		] : hollow_structure == "ring" ? [
+			[ 0, 0, "hub" ],
+			[ mid_radius, 0, "structure" ],
+			[ -mid_radius, 0, "structure" ],
+			[ 0, mid_radius, "structure" ],
+			[ 0, -mid_radius, "structure" ],
+			[ rim_connection_radius, 0, "structure" ],
+			[ -rim_connection_radius, 0, "structure" ],
+			[ 0, rim_connection_radius, "structure" ],
+			[ 0, -rim_connection_radius, "structure" ]
+		] : [],
+		axle_points = effective_secondary == "axle" || effective_secondary == "pin+axle"
+			? technic_gear_secondary_axle_stations( teeth ) : [],
+		pin_points = effective_secondary == "pin" || effective_secondary == "pin+axle"
+			? technic_gear_secondary_pin_stations( teeth ) : [],
+		base_points = [ for ( node = base_nodes ) [ node[0], node[1] ] ],
+		// A selected secondary station may coincide with a structural node
+		// (the 8 mm frame corners are the canonical example).  Upgrade the
+		// existing node role instead of duplicating its coordinate and creating
+		// a zero-length graph edge.
+		resolved_base_nodes = [
+			for ( node = base_nodes )
+				let(
+					point = [ node[0], node[1] ],
+					role = _technic_gear_point_in_list( point, axle_points ) ? "axle"
+						: _technic_gear_point_in_list( point, pin_points ) ? "pin" : node[2]
+				)
+				[ node[0], node[1], role ]
+		],
+		secondary_nodes = concat(
+			[
+				for ( point = axle_points )
+					if ( !_technic_gear_point_in_list( point, base_points ) )
+						[ point[0], point[1], "axle" ]
+			],
+			[
+				for ( point = pin_points )
+					if ( !_technic_gear_point_in_list( point, axle_points )
+						&& !_technic_gear_point_in_list( point, base_points ) )
+						[ point[0], point[1], "pin" ]
+			]
+		)
+	)
+	technic_gear_hollow_structure_valid( teeth, hollow_structure, center, effective_secondary )
+		? concat( resolved_base_nodes, secondary_nodes ) : [];
+
+/** Squared XY distance for deterministic hollow-graph attachment. */
+function _technic_gear_hollow_node_distance_squared( node_a, node_b ) =
+	( node_a[0] - node_b[0] ) * ( node_a[0] - node_b[0] )
+	+ ( node_a[1] - node_b[1] ) * ( node_a[1] - node_b[1] );
+
+/** Attach a station to the nearest already-connected base structure node. */
+function _technic_gear_hollow_nearest_base_node_index( nodes, station_index, base_count ) =
+	let(
+		distances = [
+			for ( i = [ 0 : base_count - 1 ] )
+				_technic_gear_hollow_node_distance_squared( nodes[i], nodes[station_index] )
+		],
+		minimum_distance = min( distances ),
+		matches = [ for ( i = [ 0 : base_count - 1 ] ) if ( distances[i] == minimum_distance ) i ]
+	)
+	matches[0];
+
+/** WP08 graph edges, including local connections to selected secondary stations. */
+function technic_gear_hollow_structure_edges( nodes, hollow_structure ) =
+	let(
+		base_count = hollow_structure == "cross" ? 5 : hollow_structure == "frame" || hollow_structure == "ring" ? 9 : 0,
+		base_edges = hollow_structure == "cross" ? [
+			[ 0, 1 ], [ 0, 2 ], [ 0, 3 ], [ 0, 4 ]
+		] : hollow_structure == "frame" ? [
+			// The frame must be one load path from the center hub to the rim.
+			// Four symmetric hub links prevent a visually plausible but
+			// mechanically disconnected square/rim shell.
+			[ 0, 1 ], [ 0, 2 ], [ 0, 3 ], [ 0, 4 ],
+			[ 1, 2 ], [ 2, 3 ], [ 3, 4 ], [ 4, 1 ],
+			[ 5, 1 ], [ 5, 4 ], [ 6, 2 ], [ 6, 3 ],
+			[ 7, 1 ], [ 7, 2 ], [ 8, 3 ], [ 8, 4 ]
+		] : hollow_structure == "ring" ? [
+			[ 0, 1 ], [ 0, 2 ], [ 0, 3 ], [ 0, 4 ],
+			[ 1, 5 ], [ 2, 6 ], [ 3, 7 ], [ 4, 8 ]
+		] : [],
+		secondary_edges = len( nodes ) > base_count
+			? [
+				for ( i = [ base_count : len( nodes ) - 1 ] )
+					[ _technic_gear_hollow_nearest_base_node_index( nodes, i, base_count ), i ]
+			] : []
+	)
+	base_count > 0 && len( nodes ) >= base_count
+		? concat( base_edges, secondary_edges ) : [];
+
 /** P1 reinforcement is required only for genuinely reduced local topology. */
 function technic_gear_axle_support_required( resolved_body_topology ) = resolved_body_topology == "reduced";
 
@@ -1418,37 +1615,126 @@ module technic_gear_filled_body_positive( teeth, gear_height ) {
 	}
 }
 
-/**
- * Positive continuous material for the supported reduced body topology.
- * Reduced thickness is always derived from gear_height via the approved
- * fixed 6.43 mm offset helper; there is no independent reduced-thickness knob.
- */
-module technic_gear_reduced_body_positive( teeth, gear_height ) {
-	cylinder(
-		d = technic_gear_classic_rim_inner_diameter( teeth ),
-		h = technic_gear_double_reduced_body_height( gear_height ),
-		center = true
-	);
+/** WP08 full-height solid double body inside the common tooth-root envelope. */
+module technic_gear_double_filled_body( root_diameter, height ) {
+	cylinder( d = root_diameter, h = height, center = true );
 }
 
 /**
- * Dispatch positive continuous gear-body material only.
- *
- * `hollow` intentionally emits no hidden filled disk until WP08 supplies a
- * real positive hollow structure. Unsupported cross-form filled/reduced
- * requests are resolved by technic_gear() before this internal boundary.
+ * WP08 classic reduced body: a thin inner web plus the full tooth-support rim.
+ * The rim overlaps the minimum root-overlap ring in the common tooth solid.
  */
-module technic_gear_body_positive( axial_form, body_mode, teeth, gear_height ) {
-	if ( body_mode == "filled" ) {
-		if ( axial_form == "single" ) {
-			technic_gear_filled_body_positive( teeth = teeth, gear_height = gear_height );
+module technic_gear_webbed_ring_body( root_diameter, inner_diameter, web_height, ring_height ) {
+	union() {
+		cylinder( d = inner_diameter, h = web_height, center = true );
+
+		difference() {
+			cylinder( d = root_diameter, h = ring_height, center = true );
+			cylinder( d = inner_diameter, h = ring_height + EXTENSION_FOR_DIFFERENCE, center = true );
 		}
-	} else if ( body_mode == "reduced" ) {
-		if ( axial_form == "double" ) {
-			technic_gear_reduced_body_positive( teeth = teeth, gear_height = gear_height );
+	}
+}
+
+module _technic_gear_hollow_member_between( point_a, point_b, width, height ) {
+	hull() {
+		translate( [ point_a[0], point_a[1], 0 ] ) cylinder( d = width, h = height, center = true );
+		translate( [ point_b[0], point_b[1], 0 ] ) cylinder( d = width, h = height, center = true );
+	}
+}
+
+module _technic_gear_hollow_graph_members( nodes, edges, member_width, height ) {
+	for ( edge = edges ) {
+		_technic_gear_hollow_member_between(
+			point_a = nodes[edge[0]], point_b = nodes[edge[1]],
+			width = member_width, height = height
+		);
+	}
+}
+
+/** Local pads bind selected secondary holes/axles to the hollow graph. */
+module _technic_gear_hollow_node_pads( nodes, member_width, height ) {
+	for ( node = nodes ) {
+		if ( node[2] == "pin" ) {
+			translate( [ node[0], node[1], 0 ] )
+				cylinder( d = max( member_width, technic_gear_pin_hole_outer_diameter ), h = height, center = true );
+		} else if ( node[2] == "axle" ) {
+			axle_wall_diameter = technic_axle_spline_width
+				+ ( 2 * technic_pin_connector_shoulder_wall_thickness );
+			translate( [ node[0], node[1], 0 ] )
+				cylinder( d = max( member_width, axle_wall_diameter ), h = height, center = true );
 		}
-	} else if ( body_mode == "hollow" ) {
-		// Missing until WP08. Deliberately no continuous fallback disk here.
+	}
+}
+
+module _technic_gear_hollow_hub_and_rim( hub_diameter, rim_inner_diameter, rim_outer_diameter, height ) {
+	union() {
+		cylinder( d = hub_diameter, h = height, center = true );
+		difference() {
+			cylinder( d = rim_outer_diameter, h = height, center = true );
+			cylinder( d = rim_inner_diameter, h = height + EXTENSION_FOR_DIFFERENCE, center = true );
+		}
+	}
+}
+
+module technic_gear_hollow_cross_body(
+	hub_diameter, rim_inner_diameter, rim_outer_diameter, height, member_width, nodes, edges
+) {
+	union() {
+		_technic_gear_hollow_hub_and_rim( hub_diameter, rim_inner_diameter, rim_outer_diameter, height );
+		_technic_gear_hollow_graph_members( nodes, edges, member_width, height );
+		_technic_gear_hollow_node_pads( nodes, member_width, height );
+	}
+}
+
+module technic_gear_hollow_frame_body(
+	hub_diameter, rim_inner_diameter, rim_outer_diameter, height, member_width, nodes, edges
+) {
+	union() {
+		_technic_gear_hollow_hub_and_rim( hub_diameter, rim_inner_diameter, rim_outer_diameter, height );
+		_technic_gear_hollow_graph_members( nodes, edges, member_width, height );
+		_technic_gear_hollow_node_pads( nodes, member_width, height );
+	}
+}
+
+module technic_gear_hollow_ring_body(
+	hub_diameter, rim_inner_diameter, rim_outer_diameter, height, member_width, nodes, edges
+) {
+	mid_radius = len( nodes ) >= 5 ? sqrt( nodes[1][0] * nodes[1][0] + nodes[1][1] * nodes[1][1] ) : 0;
+
+	union() {
+		_technic_gear_hollow_hub_and_rim( hub_diameter, rim_inner_diameter, rim_outer_diameter, height );
+		_technic_gear_hollow_graph_members( nodes, edges, member_width, height );
+		_technic_gear_hollow_node_pads( nodes, member_width, height );
+
+		if ( mid_radius > member_width / 2 ) {
+			difference() {
+				cylinder( d = 2 * ( mid_radius + member_width / 2 ), h = height, center = true );
+				cylinder( d = 2 * ( mid_radius - member_width / 2 ), h = height + EXTENSION_FOR_DIFFERENCE, center = true );
+			}
+		}
+	}
+}
+
+/** WP08 double-only body dispatcher. Inputs are resolved by technic_gear(). */
+module technic_gear_double_body_positive(
+	resolved_body_topology, hollow_structure, root_diameter, inner_diameter, hub_diameter,
+	gear_height, reduced_body_height, tooth_height, member_width = 0, nodes = [], edges = []
+) {
+	if ( resolved_body_topology == "solid" ) {
+		technic_gear_double_filled_body( root_diameter = root_diameter, height = gear_height );
+	} else if ( resolved_body_topology == "reduced" ) {
+		technic_gear_webbed_ring_body(
+			root_diameter = root_diameter, inner_diameter = inner_diameter,
+			web_height = reduced_body_height, ring_height = tooth_height
+		);
+	} else if ( resolved_body_topology == "hollow" && len( nodes ) > 0 ) {
+		if ( hollow_structure == "cross" ) {
+			technic_gear_hollow_cross_body( hub_diameter, inner_diameter, root_diameter, gear_height, member_width, nodes, edges );
+		} else if ( hollow_structure == "frame" ) {
+			technic_gear_hollow_frame_body( hub_diameter, inner_diameter, root_diameter, gear_height, member_width, nodes, edges );
+		} else if ( hollow_structure == "ring" ) {
+			technic_gear_hollow_ring_body( hub_diameter, inner_diameter, root_diameter, gear_height, member_width, nodes, edges );
+		}
 	}
 }
 
@@ -1491,20 +1777,33 @@ module technic_gear(
 	effective_secondary_feature = axial_form == "double"
 		? technic_gear_secondary_effective_feature( teeth, secondary_feature )
 		: "none";
+	body_root_diameter = axial_form == "double" ? technic_gear_double_rim_outer_diameter( teeth ) : 0;
+	body_inner_diameter = axial_form == "double" ? technic_gear_double_rim_inner_diameter( teeth, resolved_body_topology ) : 0;
+	body_hub_diameter = axial_form == "double" ? technic_gear_double_hub_diameter( teeth, center, resolved_body_topology ) : 0;
+	hollow_valid = axial_form == "double" && body_mode == "hollow"
+		? technic_gear_hollow_structure_valid( teeth, hollow_structure, center, effective_secondary_feature )
+		: false;
+	hollow_member_width = hollow_valid
+		? technic_gear_hollow_member_width( teeth, hollow_structure, center, effective_secondary_feature ) : 0;
+	hollow_nodes = hollow_valid
+		? technic_gear_hollow_structure_nodes( teeth, hollow_structure, center, effective_secondary_feature ) : [];
+	hollow_edges = hollow_valid ? technic_gear_hollow_structure_edges( hollow_nodes, hollow_structure ) : [];
 	height_state = "supported";
 	tooth_sections_state = tooth_sections == "normal" ? "supported" : "fallback";
 	bevel_state = bevel == effective_bevel ? "supported" : "fallback";
 	body_mode_state = axial_form == "double"
-		? ( body_mode == "reduced" ? "supported" : "missing" )
+		? ( body_mode == "hollow" ? ( hollow_valid ? "supported" : "missing" ) : "supported" )
 		: body_mode == "hollow" ? "missing" : ( body_mode == effective_body_mode ? "supported" : "fallback" );
 	center_state = "supported";
 	secondary_state = axial_form == "double"
 		? ( secondary_feature == effective_secondary_feature ? "supported" :
 			_technic_gear_value_in( secondary_feature, [ "none", "pin", "axle", "pin+axle" ] ) ? "partial" : "fallback" )
 		: ( secondary_feature == "none" ? "supported" : "fallback" );
-	hollow_effective = body_mode == "hollow" ? hollow_structure : "inactive";
-	hollow_state = body_mode == "hollow" ? "missing" : "derived";
-	hollow_reason = body_mode == "hollow" ? "hollow-not-implemented" : "body-not-hollow";
+	hollow_effective = body_mode == "hollow" && hollow_valid ? hollow_structure : body_mode == "hollow" ? "none" : "inactive";
+	hollow_state = body_mode == "hollow" ? ( hollow_valid ? "supported" : "missing" ) : "derived";
+	hollow_reason = body_mode == "hollow"
+		? ( hollow_valid ? "wp08-derived-hollow-structure" : ( is_undef( hollow_structure ) ? "hollow-structure-required" : "hollow-envelope-too-small" ) )
+		: "body-not-hollow";
 
 	_technic_gear_support_record( "axial_form", axial_form, axial_form, "supported", "legacy-path", debug );
 	_technic_gear_support_record( "teeth", teeth, teeth, "supported", "legacy-path", debug );
@@ -1513,8 +1812,8 @@ module technic_gear(
 	_technic_gear_support_record( "bevel", bevel, effective_bevel, bevel_state, bevel_state == "supported" ? ( axial_form == "double" && effective_bevel == "double" ? "wp07-double-bevel" : "legacy-path" ) : "bevel-not-implemented", debug );
 	_technic_gear_support_record(
 		"body_mode", body_mode, effective_body_mode, body_mode_state,
-		body_mode_state == "supported" ? "body-dispatcher" :
-		body_mode_state == "missing" ? ( body_mode == "hollow" ? "hollow-not-implemented" : "filled-double-not-implemented" ) :
+		body_mode_state == "supported" ? ( axial_form == "double" ? "wp08-double-body-dispatcher" : "body-dispatcher" ) :
+		body_mode_state == "missing" ? ( body_mode == "hollow" ? hollow_reason : "body-mode-not-implemented" ) :
 		"body-mode-not-implemented",
 		debug
 	);
@@ -1535,6 +1834,14 @@ module technic_gear(
 			"|tooth_height=", resolved_tooth_height,
 			"|tooth_offset=", effective_height - resolved_tooth_height
 		) );
+		echo( str(
+			"TECHNIC_GEAR_BODY|root_diameter=", body_root_diameter,
+			"|inner_diameter=", body_inner_diameter,
+			"|hub_diameter=", body_hub_diameter,
+			"|member_width=", hollow_member_width,
+			"|nodes=", len( hollow_nodes ),
+			"|edges=", len( hollow_edges )
+		) );
 	}
 
 	assert( technic_gear_axial_dimensions_valid( axial_form, effective_height, axial_form == "double" ? resolved_body_topology : undef ), str( "gear_height produces invalid axial dimensions: ", effective_height ) );
@@ -1546,7 +1853,10 @@ module technic_gear(
 			body_mode = effective_body_mode, secondary_feature = effective_secondary_feature,
 			resolved_body_topology = resolved_body_topology,
 			resolved_tooth_height = resolved_tooth_height,
-			bevel = effective_bevel
+			bevel = effective_bevel,
+			body_root_diameter = body_root_diameter, body_inner_diameter = body_inner_diameter,
+			body_hub_diameter = body_hub_diameter, hollow_structure = hollow_structure,
+			hollow_member_width = hollow_member_width, hollow_nodes = hollow_nodes, hollow_edges = hollow_edges
 		);
 	} else {
 		_technic_gear_single_sided_legacy( teeth = teeth, bevel = effective_bevel == "single", center_hole = effective_center, gear_height = effective_height, body_mode = effective_body_mode );
@@ -1672,14 +1982,26 @@ module _technic_gear_double_sided_legacy(
 	secondary_feature = "pin+axle",
 	resolved_body_topology = "reduced",
 	resolved_tooth_height = technic_gear_double_reduced_tooth_section_height( technic_gear_normal_height( "double" ) ),
-	bevel = "none"
+	bevel = "none",
+	body_root_diameter = undef,
+	body_inner_diameter = undef,
+	body_hub_diameter = undef,
+	hollow_structure = undef,
+	hollow_member_width = 0,
+	hollow_nodes = [],
+	hollow_edges = []
 ) {
 	include <lib/gears/gears.scad>;
 
 	desired_gear_axle_reinforcement_thickness = gear_height;
-	desired_pin_hole_thickness = technic_gear_double_secondary_wall_height( gear_height );
+	desired_pin_wall_thickness = technic_gear_double_secondary_wall_height( gear_height );
+	// A reduced body needs only the historical local boss-height bore because
+	// the surrounding web is thinner.  Full-height solid/hollow bodies own
+	// material through H, so their requested pin holes must cut through H too.
+	desired_pin_cutout_height = resolved_body_topology == "reduced"
+		? desired_pin_wall_thickness : gear_height;
 	desired_gear_tooth_thickness = resolved_tooth_height;
-	gear_inner_diameter = technic_gear_classic_rim_inner_diameter( teeth );
+	tooth_bore_diameter = body_root_diameter - ( EXTENSION_FOR_DIFFERENCE / 2 );
 
 	// Resolve the combined station registry once. Both boolean operands consume
 	// this exact value so center and secondary geometry cannot drift.
@@ -1690,22 +2012,34 @@ module _technic_gear_double_sided_legacy(
 		union() {
 			difference() {
 				union() {
-					technic_gear_body_positive(
-						axial_form = "double",
-						body_mode = body_mode,
-						teeth = teeth,
-						gear_height = gear_height
+					technic_gear_double_body_positive(
+						resolved_body_topology = resolved_body_topology,
+						hollow_structure = hollow_structure,
+						root_diameter = body_root_diameter,
+						inner_diameter = body_inner_diameter,
+						hub_diameter = body_hub_diameter,
+						gear_height = gear_height,
+						reduced_body_height = technic_gear_double_reduced_body_height( gear_height ),
+						tooth_height = resolved_tooth_height,
+						member_width = hollow_member_width,
+						nodes = hollow_nodes,
+						edges = hollow_edges
 					);
 
-					technic_gear_secondary_pins_positive(
-						teeth = teeth, secondary_feature = secondary_feature,
-						height = desired_pin_hole_thickness
-					);
+					// Solid bodies already contain the local pin wall; hollow bodies build
+					// derived node pads for selected stations.  Only the thin reduced web
+					// still needs the legacy positive pin-wall operand.
+					if ( resolved_body_topology == "reduced" ) {
+						technic_gear_secondary_pins_positive(
+							teeth = teeth, secondary_feature = secondary_feature,
+							height = desired_pin_wall_thickness
+						);
+					}
 				}
 
 				technic_gear_secondary_pins_negative(
 					teeth = teeth, secondary_feature = secondary_feature,
-					height = desired_pin_hole_thickness
+					height = desired_pin_cutout_height
 				);
 			}
 
@@ -1714,7 +2048,7 @@ module _technic_gear_double_sided_legacy(
 					technic_gear_normal_tooth_solid(
 						teeth = teeth,
 						height = desired_gear_tooth_thickness,
-						bore_diameter = gear_inner_diameter + ( EXTENSION_FOR_DIFFERENCE / 2 )
+						bore_diameter = tooth_bore_diameter
 					);
 
 					technic_gear_double_bevel_cutter(
@@ -1726,7 +2060,7 @@ module _technic_gear_double_sided_legacy(
 				technic_gear_normal_tooth_solid(
 					teeth = teeth,
 					height = desired_gear_tooth_thickness,
-					bore_diameter = gear_inner_diameter + ( EXTENSION_FOR_DIFFERENCE / 2 )
+					bore_diameter = tooth_bore_diameter
 				);
 			}
 
@@ -1790,13 +2124,10 @@ module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole 
 
 	difference() {
 		union() {
-			// Positive continuous body material is owned by the WP05 body dispatcher.
-			technic_gear_body_positive(
-				axial_form = "single",
-				body_mode = body_mode,
-				teeth = teeth,
-				gear_height = gear_height
-			);
+			// Single-form body migration remains deferred to WP11.  Call the
+			// existing concrete single body directly; do not retain a broad
+			// cross-form body dispatcher before both contracts are compatible.
+			technic_gear_filled_body_positive( teeth = teeth, gear_height = gear_height );
 
 			// The teeth. Use the shared module-1 involute solid; beveling is a
 			// separate exposed-face subtraction so the body-side profile remains full.
