@@ -2700,18 +2700,23 @@ module technic_gear_double_filled_body( root_diameter, height ) {
 	cylinder( d = root_diameter, h = height, center = true );
 }
 
-/**
- * WP08 classic reduced body: a thin inner web plus the full tooth-support rim.
- * The rim overlaps the minimum root-overlap ring in the common tooth solid.
- */
-module technic_gear_webbed_ring_body( root_diameter, inner_diameter, web_height, ring_height ) {
-	union() {
-		cylinder( d = inner_diameter, h = web_height, center = true );
+/** WP13F inner reduced web only; the tooth-support ring is assembled later. */
+module technic_gear_reduced_inner_web_positive( inner_diameter, web_height ) {
+	cylinder( d = inner_diameter, h = web_height, center = true );
+}
 
-		difference() {
-			cylinder( d = root_diameter, h = ring_height, center = true );
-			cylinder( d = inner_diameter, h = ring_height + EXTENSION_FOR_DIFFERENCE, center = true );
-		}
+/**
+ * WP13F positive outer tooth-support annulus.
+ *
+ * This helper owns only the existing annulus dimensions.  The owning assembly
+ * adds it after all inner/body positive and negative Boolean work is complete.
+ */
+module technic_gear_double_tooth_support_ring_positive(
+	root_diameter, inner_diameter, height
+) {
+	difference() {
+		cylinder( d = root_diameter, h = height, center = true );
+		cylinder( d = inner_diameter, h = height + EXTENSION_FOR_DIFFERENCE, center = true );
 	}
 }
 
@@ -2942,10 +2947,9 @@ module technic_gear_reduced_ring_body(
 
     union() {
         if ( shell_count == 1 ) {
-            // Freeze the accepted 16T construction: reduced web + source collars.
-            technic_gear_webbed_ring_body(
-                root_diameter = root_diameter, inner_diameter = inner_diameter,
-                web_height = web_height, ring_height = ring_height
+            // Freeze the accepted 16T inner construction: reduced web + source collars.
+            technic_gear_reduced_inner_web_positive(
+                inner_diameter = inner_diameter, web_height = web_height
             );
             technic_gear_reduced_ring_collars_positive( height = ring_height, inner_diameter = inner_diameter );
         } else {
@@ -2953,13 +2957,9 @@ module technic_gear_reduced_ring_body(
             // full-height overlapping circular collars.  The web fills only
             // accidental interstitial slivers; the explicit circular cutters
             // remain the sole through-relief pattern.  The reserved tooth rim
-            // is still generated independently at full ring height.
+            // is assembled independently after inner subtraction completes.
             cylinder( d = inner_diameter, h = web_height, center = true );
 
-            difference() {
-                cylinder( d = root_diameter, h = ring_height, center = true );
-                cylinder( d = inner_diameter, h = ring_height + EXTENSION_FOR_DIFFERENCE, center = true );
-            }
             technic_gear_reduced_ring_cellular_lattice_positive(
                 height = ring_height, inner_diameter = inner_diameter
             );
@@ -3000,14 +3000,8 @@ module _technic_gear_hollow_node_pads( nodes, member_width, height ) {
 	}
 }
 
-module _technic_gear_hollow_hub_and_rim( hub_diameter, rim_inner_diameter, rim_outer_diameter, height ) {
-	union() {
-		cylinder( d = hub_diameter, h = height, center = true );
-		difference() {
-			cylinder( d = rim_outer_diameter, h = height, center = true );
-			cylinder( d = rim_inner_diameter, h = height + EXTENSION_FOR_DIFFERENCE, center = true );
-		}
-	}
+module _technic_gear_hollow_hub_positive( hub_diameter, height ) {
+	cylinder( d = hub_diameter, h = height, center = true );
 }
 
 /**
@@ -3034,7 +3028,7 @@ module technic_gear_hollow_cross_body(
 	hub_diameter, rim_inner_diameter, rim_outer_diameter, height, member_width, nodes, edges
 ) {
 	union() {
-		_technic_gear_hollow_hub_and_rim( hub_diameter, rim_inner_diameter, rim_outer_diameter, height );
+		_technic_gear_hollow_hub_positive( hub_diameter, height );
 		_technic_gear_hollow_cross_members( rim_outer_diameter, member_width, height );
 		_technic_gear_hollow_node_pads( nodes, member_width, height );
 	}
@@ -3044,7 +3038,7 @@ module technic_gear_hollow_frame_body(
 	hub_diameter, rim_inner_diameter, rim_outer_diameter, height, member_width, nodes, edges
 ) {
 	union() {
-		_technic_gear_hollow_hub_and_rim( hub_diameter, rim_inner_diameter, rim_outer_diameter, height );
+		_technic_gear_hollow_hub_positive( hub_diameter, height );
 		// FRAME is an extension of CROSS: keep the cardinal backbone continuously hub-to-rim.
 		// Use the same member width as every square/diamond edge.
 		_technic_gear_hollow_cross_members( rim_outer_diameter, member_width, height );
@@ -3059,7 +3053,7 @@ module technic_gear_hollow_ring_body(
 	mid_radius = len( nodes ) >= 5 ? sqrt( nodes[1][0] * nodes[1][0] + nodes[1][1] * nodes[1][1] ) : 0;
 
 	union() {
-		_technic_gear_hollow_hub_and_rim( hub_diameter, rim_inner_diameter, rim_outer_diameter, height );
+		_technic_gear_hollow_hub_positive( hub_diameter, height );
 		_technic_gear_hollow_graph_members( nodes, edges, member_width, height );
 		_technic_gear_hollow_node_pads( nodes, member_width, height );
 
@@ -3087,9 +3081,8 @@ module technic_gear_double_body_positive(
 				ring_height = tooth_height, center_height = gear_height
 			);
 		} else {
-			technic_gear_webbed_ring_body(
-				root_diameter = root_diameter, inner_diameter = inner_diameter,
-				web_height = reduced_body_height, ring_height = tooth_height
+			technic_gear_reduced_inner_web_positive(
+				inner_diameter = inner_diameter, web_height = reduced_body_height
 			);
 		}
 	} else if ( resolved_body_topology == "hollow" && len( nodes ) > 0 ) {
@@ -3710,123 +3703,138 @@ module _technic_gear_double_sided_legacy(
 	station_body_topology = resolved_body_topology == "reduced" && reduced_pattern == "ring" ? "solid" : resolved_body_topology;
 	axle_records = technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode, station_body_topology, hollow_structure );
 
-	// Preserve the accepted WP05 nested body boolean ownership.
-	difference() {
-		union() {
-			difference() {
-				union() {
-					technic_gear_double_body_positive(
-						resolved_body_topology = resolved_body_topology,
-						reduced_pattern = reduced_pattern,
-						hollow_structure = hollow_structure,
-						root_diameter = body_root_diameter,
-						inner_diameter = body_inner_diameter,
-						hub_diameter = body_hub_diameter,
-						gear_height = gear_height,
-						reduced_body_height = technic_gear_double_reduced_body_height( gear_height ),
-						tooth_height = resolved_tooth_height,
-						member_width = hollow_member_width,
-						nodes = hollow_nodes,
-						edges = hollow_edges
-					);
 
-					// Solid bodies already contain the local pin wall; hollow bodies build
-					// derived node pads for selected stations.  Only the thin reduced web
-					// still needs the legacy positive pin-wall operand.
-					if ( resolved_body_topology == "reduced" ) {
-						technic_gear_secondary_pins_positive(
-							teeth = teeth, secondary_feature = secondary_feature,
-							height = desired_pin_wall_thickness
+	// WP13F: finish all inner/body Boolean work before the outer ring and teeth.
+	union() {
+		difference() {
+			union() {
+				difference() {
+					union() {
+						technic_gear_double_body_positive(
+							resolved_body_topology = resolved_body_topology,
+							reduced_pattern = reduced_pattern,
+							hollow_structure = hollow_structure,
+							root_diameter = body_root_diameter,
+							inner_diameter = body_inner_diameter,
+							hub_diameter = body_hub_diameter,
+							gear_height = gear_height,
+							reduced_body_height = technic_gear_double_reduced_body_height( gear_height ),
+							tooth_height = resolved_tooth_height,
+							member_width = hollow_member_width,
+							nodes = hollow_nodes,
+							edges = hollow_edges
 						);
+
+						// Solid bodies already contain the local pin wall; hollow bodies build
+						// derived node pads for selected stations.  Only the thin reduced web
+						// still needs the legacy positive pin-wall operand.
+						if ( resolved_body_topology == "reduced" ) {
+							technic_gear_secondary_pins_positive(
+								teeth = teeth, secondary_feature = secondary_feature,
+								height = desired_pin_wall_thickness
+							);
+						}
 					}
+
+					technic_gear_secondary_pins_negative(
+						teeth = teeth, secondary_feature = secondary_feature,
+						height = desired_pin_cutout_height,
+						body_mode = body_mode, hollow_structure = hollow_structure
+					);
 				}
 
-				technic_gear_secondary_pins_negative(
-					teeth = teeth, secondary_feature = secondary_feature,
-					height = desired_pin_cutout_height,
-					body_mode = body_mode, hollow_structure = hollow_structure
-				);
-			}
-
-			if ( bevel == "double" ) {
-				technic_gear_double_bevel_tooth_solid(
-					teeth = teeth,
-					height = desired_gear_tooth_thickness,
-					bore = tooth_bore_diameter
-				);
-			} else if ( tooth_sections == "stepped" ) {
-				technic_gear_tooth_sections_solid(
-					teeth = teeth, records = tooth_section_records,
-					bore_diameter = tooth_bore_diameter
-				);
-			} else {
-				technic_gear_normal_tooth_solid(
-					teeth = teeth,
-					height = desired_gear_tooth_thickness,
-					bore_diameter = tooth_bore_diameter
+				technic_gear_place_axle_stations(
+					records = axle_records, height = desired_gear_axle_reinforcement_thickness,
+					operand = "positive"
 				);
 			}
 
 			technic_gear_place_axle_stations(
 				records = axle_records, height = desired_gear_axle_reinforcement_thickness,
-				operand = "positive"
+				operand = "negative"
 			);
-		}
 
-		technic_gear_place_axle_stations(
-			records = axle_records, height = desired_gear_axle_reinforcement_thickness,
-			operand = "negative"
-		);
-
-		// 4019 keeps the canonical reduced P1 center support/relief alignment.
-		// Its four cardinal circular openings reshape that shared support instead
-		// of replacing it with a bespoke center primitive.
-		if ( resolved_body_topology == "reduced" && reduced_pattern == "ring" ) {
-			if ( technic_gear_reduced_ring_shell_count_from_inner_diameter( body_inner_diameter ) == 1 ) {
-				// Preserve the exact accepted-looking 4019 one-shell Boolean path.
-				technic_gear_reduced_ring_open_axle_relief_negative( height = gear_height );
-				technic_gear_reduced_ring_openings_negative( height = gear_height, inner_diameter = body_inner_diameter );
-			} else {
-				// Large patterns cut one selected circular relief field through both
-				// the full-height collars and the thin reduced web.
-				union() {
+			// 4019 keeps the canonical reduced P1 center support/relief alignment.
+			// Its four cardinal circular openings reshape that shared support instead
+			// of replacing it with a bespoke center primitive.
+			if ( resolved_body_topology == "reduced" && reduced_pattern == "ring" ) {
+				if ( technic_gear_reduced_ring_shell_count_from_inner_diameter( body_inner_diameter ) == 1 ) {
+					// Preserve the exact accepted-looking 4019 one-shell Boolean path.
 					technic_gear_reduced_ring_open_axle_relief_negative( height = gear_height );
-					technic_gear_reduced_ring_cellular_openings_negative(
-						height = gear_height, inner_diameter = body_inner_diameter
-					);
+					technic_gear_reduced_ring_openings_negative( height = gear_height, inner_diameter = body_inner_diameter );
+				} else {
+					// Large patterns cut one selected circular relief field through both
+					// the full-height collars and the thin reduced web.
+					union() {
+						technic_gear_reduced_ring_open_axle_relief_negative( height = gear_height );
+						technic_gear_reduced_ring_cellular_openings_negative(
+							height = gear_height, inner_diameter = body_inner_diameter
+						);
+					}
 				}
+			}
+
+			if ( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" ) {
+				clutch_depth = technic_gear_clutch_interface_depth( gear_height );
+				clutch_radius = technic_gear_clutch_interface_radius( teeth, resolved_body_topology );
+				clutch_inner_clearance = technic_gear_clutch_inner_clearance_radius( center );
+				clutch_profile = technic_gear_clutch_profile_points( teeth, gear_height, resolved_body_topology );
+				clutch_face_z = technic_gear_clutch_face_z_positions( secondary_feature, gear_height, clutch_depth );
+
+				technic_gear_place_clutch_interfaces(
+					face_z_positions = clutch_face_z,
+					profile_points = clutch_profile,
+					inner_clearance_radius = clutch_inner_clearance,
+					interface_radius = clutch_radius,
+					depth = clutch_depth
+				);
+			}
+
+			// Pin center remains on the accepted WP04 path and is not an axle record.
+			if ( center == "pin" ) {
+				technic_gear_center_negative(
+					center = "pin", height = desired_gear_axle_reinforcement_thickness
+				);
 			}
 		}
 
-		if ( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" ) {
-			clutch_depth = technic_gear_clutch_interface_depth( gear_height );
-			clutch_radius = technic_gear_clutch_interface_radius( teeth, resolved_body_topology );
-			clutch_inner_clearance = technic_gear_clutch_inner_clearance_radius( center );
-			clutch_profile = technic_gear_clutch_profile_points( teeth, gear_height, resolved_body_topology );
-			clutch_face_z = technic_gear_clutch_face_z_positions( secondary_feature, gear_height, clutch_depth );
-
-			technic_gear_place_clutch_interfaces(
-				face_z_positions = clutch_face_z,
-				profile_points = clutch_profile,
-				inner_clearance_radius = clutch_inner_clearance,
-				interface_radius = clutch_radius,
-				depth = clutch_depth
-			);
-		}
-
-		// Pin center remains on the accepted WP04 path and is not an axle record.
+		// The positive pin-center wall belongs to the finished inner assembly.
 		if ( center == "pin" ) {
-			technic_gear_center_negative(
-				center = "pin", height = desired_gear_axle_reinforcement_thickness
+			technic_gear_center_positive(
+				center = "pin", axial_form = "double",
+				reinforcement_height = desired_gear_axle_reinforcement_thickness
 			);
 		}
-	}
 
-	if ( center == "pin" ) {
-		technic_gear_center_positive(
-			center = "pin", axial_form = "double",
-			reinforcement_height = desired_gear_axle_reinforcement_thickness
-		);
+		// Solid bodies are already the complete root disk.  Reduced and hollow
+		// bodies add their existing tooth-support annulus only after inner cuts.
+		if ( resolved_body_topology != "solid" ) {
+			technic_gear_double_tooth_support_ring_positive(
+				root_diameter = body_root_diameter,
+				inner_diameter = body_inner_diameter,
+				height = resolved_body_topology == "reduced"
+					? resolved_tooth_height : gear_height
+			);
+		}
+
+		if ( bevel == "double" ) {
+			technic_gear_double_bevel_tooth_solid(
+				teeth = teeth,
+				height = desired_gear_tooth_thickness,
+				bore = tooth_bore_diameter
+			);
+		} else if ( tooth_sections == "stepped" ) {
+			technic_gear_tooth_sections_solid(
+				teeth = teeth, records = tooth_section_records,
+				bore_diameter = tooth_bore_diameter
+			);
+		} else {
+			technic_gear_normal_tooth_solid(
+				teeth = teeth,
+				height = desired_gear_tooth_thickness,
+				bore_diameter = tooth_bore_diameter
+			);
+		}
 	}
 }
 
