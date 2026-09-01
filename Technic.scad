@@ -1928,6 +1928,78 @@ module technic_gear_center_negative( center, height, wide_axle = false, pin_clea
 	}
 }
 
+/**
+ * Positive outer wall for one singular center pin interface.
+ *
+ * The wall owns only positive material.  The functional bore and optional
+ * end counterbores are paired negative geometry in
+ * `technic_gear_center_pin_cutout(...)`.  Keeping the operands separate
+ * prevents surrounding body material from refilling the pin bore.
+ */
+module technic_gear_center_pin_wall( height, shoulder ) {
+	assert( is_num( height ) && height > 0, str( "invalid center pin height: ", height ) );
+	assert( shoulder == true || shoulder == false, str( "invalid center pin shoulder flag: ", shoulder ) );
+
+	cylinder( d = technic_pin_connector_outer_diameter, h = height, center = true );
+}
+
+/**
+ * Negative bore for one singular center pin interface.
+ *
+ * A plain pin interface uses the standard Technic hole diameter through the
+ * full wall.  A shouldered interface additionally opens the two end regions
+ * to the existing connector shoulder diameter.  The end counterbores extend
+ * outward by `EXTENSION_FOR_DIFFERENCE` while retaining the exact inner
+ * shoulder transition plane.
+ */
+module technic_gear_center_pin_cutout( height, shoulder ) {
+	assert( is_num( height ) && height > 0, str( "invalid center pin height: ", height ) );
+	assert( shoulder == true || shoulder == false, str( "invalid center pin shoulder flag: ", shoulder ) );
+	assert( !shoulder || height > 2 * technic_pin_connector_shoulder_depth,
+		str( "center pin height too small for shoulders: ", height ) );
+
+	cylinder(
+		d = technic_hole_diameter,
+		h = height + EXTENSION_FOR_DIFFERENCE,
+		center = true
+	);
+
+	if ( shoulder ) {
+		shoulder_diameter = technic_pin_connector_outer_diameter
+			- 2 * technic_pin_connector_shoulder_wall_thickness;
+		shoulder_depth = technic_pin_connector_shoulder_depth;
+
+		for ( direction = [ -1, 1 ] ) {
+			translate( [
+				0, 0,
+				direction * ( height / 2 - shoulder_depth / 2 + EXTENSION_FOR_DIFFERENCE / 2 )
+			] ) {
+				cylinder(
+					d = shoulder_diameter,
+					h = shoulder_depth + EXTENSION_FOR_DIFFERENCE,
+					center = true
+				);
+			}
+		}
+	}
+}
+
+/**
+ * Sole placement/operand selector for a singular center pin interface.
+ *
+ * The caller owns the resolved center position.  This helper owns only which
+ * paired local geometry participates in the positive or negative boolean pass.
+ */
+module technic_gear_place_center_pin( height, shoulder, operand ) {
+	assert( operand == "positive" || operand == "negative", str( "invalid center pin operand: ", operand ) );
+
+	if ( operand == "positive" ) {
+		technic_gear_center_pin_wall( height = height, shoulder = shoulder );
+	} else {
+		technic_gear_center_pin_cutout( height = height, shoulder = shoulder );
+	}
+}
+
 /** Radial clearance for the singular center connector against the owning body. */
 function technic_gear_center_radial_clearance_valid( center, axial_form, teeth ) =
 	center == "axle"
@@ -2850,6 +2922,9 @@ module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole 
 	tooth_height = technic_gear_single_tooth_height( gear_height );
 	gear_diameter = technic_gear_single_body_diameter( teeth );
 	hub_diameter = technic_gear_single_hub_diameter( teeth, center_hole );
+	center_pin_height = technic_height_in_mm;
+	center_pin_shoulder = true;
+	center_pin_z = lip_height + center_pin_height / 2;
 
 	difference() {
 		union() {
@@ -2889,29 +2964,29 @@ module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole 
 					}
 				}
 			}
+
+			if ( center_hole == "pin" ) {
+				translate( [ 0, 0, center_pin_z ] ) {
+					technic_gear_place_center_pin(
+						height = center_pin_height,
+						shoulder = center_pin_shoulder,
+						operand = "positive"
+					);
+				}
+			}
 		}
 
 		if ( center_hole == "axle" ) {
-			// Remove the axle hole.
-			technic_gear_center_negative( center = "axle", height = 1 );
+			// Single-form axle center stays on the general compatible axle primitive.
+			technic_axle_hole( height = 1 );
 		} else if ( center_hole == "pin" ) {
-			translate( [ 0, 0, lip_height + ( base_height + tooth_height ) / 2 ] ) {
-				technic_gear_center_negative(
-					center = "pin",
-					height = base_height + tooth_height,
-					pin_clearance_diameter = min( technic_pin_connector_outer_diameter, technic_gear_12_tooth_lip_inner_diameter )
+			translate( [ 0, 0, center_pin_z ] ) {
+				technic_gear_place_center_pin(
+					height = center_pin_height,
+					shoulder = center_pin_shoulder,
+					operand = "negative"
 				);
 			}
-		}
-	}
-
-	if ( center_hole == "pin" ) {
-		translate( [ 0, 0, lip_height + ( technic_height_in_mm / 2 ) ] ) {
-			technic_gear_center_positive(
-				center = "pin",
-				axial_form = "single",
-				reinforcement_height = technic_height_in_mm
-			);
 		}
 	}
 }
