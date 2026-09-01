@@ -988,6 +988,33 @@ module technic_gear_double_sided(
 	);
 }
 
+/**
+ * Generate the positive normal-tooth solid shared by normal spur-based gear paths.
+ *
+ * This primitive pins the vendor involute call and owns only the minimum
+ * tooth-root overlap required to connect the tooth solid to its owning body.
+ * Body topology, center cuts, secondary connectors, placement, bevel cuts,
+ * and stepped tooth sections remain outside this module.
+ */
+module technic_gear_normal_tooth_solid(
+	teeth,
+	height,
+	bore_diameter
+) {
+	include <lib/gears/gears.scad>;
+
+	translate( [ 0, 0, - ( height / 2 ) ] ) {
+		spur_gear( modul = 1, tooth_number = teeth, width = height, bore = bore_diameter, pressure_angle=20, optimized = false );
+	};
+
+	// The vendor gear leaves tiny gaps at the tooth-root corners. This ring is
+	// the minimum positive overlap needed to connect those roots to the body.
+	difference() {
+		cylinder( d = technic_gear_root_diameter( teeth ), h = height, center = true );
+		cylinder( d = bore_diameter - ( EXTENSION_FOR_DIFFERENCE / 2 ), h = height + EXTENSION_FOR_DIFFERENCE, center = true );
+	};
+}
+
 module _technic_gear_double_sided_legacy(
 	teeth = 24,
 	gear_height = technic_gear_normal_height( "double" )
@@ -1086,19 +1113,12 @@ module _technic_gear_double_sided_legacy(
 				};
 			};
 
-			// The teeth.
-			translate( [ 0, 0, - ( desired_gear_tooth_thickness / 2 ) ] ) {
-				// The gear teeth seem like they're a little too long (exceeding gear_diameter), but I can't tell if it matters.
-				// The bore is slightly larger than the inner diameter so that the bore surface is buried inside the tooth-root filler ring below,
-				// rather than exactly coinciding with the ring's inner surface and the hub's rim, which would leave non-manifold edges.
-				spur_gear( modul = 1, tooth_number = teeth, width = desired_gear_tooth_thickness, bore = gear_inner_diameter + ( EXTENSION_FOR_DIFFERENCE / 2 ), pressure_angle=20, optimized = false );
-			};
-
-			// The gear function leaves very small gaps at the bottom corners of the teeth. Fill that all in.
-			difference() {
-				cylinder( d = technic_gear_root_diameter( teeth ), h = desired_gear_tooth_thickness, center = true );
-				cylinder( d = gear_inner_diameter, h = desired_gear_tooth_thickness + EXTENSION_FOR_DIFFERENCE, center = true );
-			};
+			// The normal teeth and their minimum tooth-root overlap.
+			technic_gear_normal_tooth_solid(
+				teeth = teeth,
+				height = desired_gear_tooth_thickness,
+				bore_diameter = gear_inner_diameter + ( EXTENSION_FOR_DIFFERENCE / 2 )
+			);
 
 			// The supports around the axle holes.
 			difference() {
