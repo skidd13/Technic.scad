@@ -3739,6 +3739,16 @@ module _technic_gear_double_sided_legacy(
 					records = axle_records, height = desired_gear_axle_reinforcement_thickness,
 					operand = "positive"
 				);
+
+				// WP13H: the raw double pin-center wall belongs to the principal
+				// inner positive assembly; its paired functional bore is cut below.
+				if ( center == "pin" ) {
+					technic_gear_place_center_pin(
+						height = desired_gear_axle_reinforcement_thickness,
+						shoulder = true,
+						operand = "positive"
+					);
+				}
 			}
 
 			technic_gear_secondary_pins_negative(
@@ -3751,6 +3761,14 @@ module _technic_gear_double_sided_legacy(
 				records = axle_records, height = desired_gear_axle_reinforcement_thickness,
 				operand = "negative"
 			);
+
+			if ( center == "pin" ) {
+				technic_gear_place_center_pin(
+					height = desired_gear_axle_reinforcement_thickness,
+					shoulder = true,
+					operand = "negative"
+				);
+			}
 
 			// 4019 keeps the canonical reduced P1 center support/relief alignment.
 			// Its four cardinal circular openings reshape that shared support instead
@@ -3788,20 +3806,6 @@ module _technic_gear_double_sided_legacy(
 				);
 			}
 
-			// Pin center remains on the accepted WP04 path and is not an axle record.
-			if ( center == "pin" ) {
-				technic_gear_center_negative(
-					center = "pin", height = desired_gear_axle_reinforcement_thickness
-				);
-			}
-		}
-
-		// The positive pin-center wall belongs to the finished inner assembly.
-		if ( center == "pin" ) {
-			technic_gear_center_positive(
-				center = "pin", axial_form = "double",
-				reinforcement_height = desired_gear_axle_reinforcement_thickness
-			);
 		}
 
 		// Solid bodies are already the complete root disk.  Reduced and hollow
