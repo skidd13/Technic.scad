@@ -1015,6 +1015,37 @@ module technic_gear_normal_tooth_solid(
 	};
 }
 
+/**
+ * Generate the subtraction solid for one exposed-face bevel on normal teeth.
+ *
+ * The taper is derived from the LDraw 20T bevel-tooth primitive: 3 radial
+ * units over 6.5 axial units. The cutter removes nothing at the body-side
+ * tooth plane and reaches its maximum radial depth at the exposed face.
+ */
+module technic_gear_single_bevel_cutter(
+	teeth,
+	height
+) {
+	bevel_radial_per_axial = 3 / 6.5;
+	tip_radius = technic_gear_tip_diameter( teeth ) / 2;
+	max_radial_removal = height * bevel_radial_per_axial;
+	z_extension = EXTENSION_FOR_DIFFERENCE;
+	outer_radius = tip_radius + max_radial_removal + EXTENSION_FOR_DIFFERENCE;
+	inner_radius_body_side = tip_radius + ( z_extension * bevel_radial_per_axial );
+	inner_radius_exposed_side = tip_radius - max_radial_removal - ( z_extension * bevel_radial_per_axial );
+
+	translate( [ 0, 0, -( height / 2 ) - z_extension ] ) {
+		difference() {
+			cylinder( r = outer_radius, h = height + ( z_extension * 2 ) );
+			cylinder(
+				r1 = inner_radius_body_side,
+				r2 = inner_radius_exposed_side,
+				h = height + ( z_extension * 2 )
+			);
+		}
+	}
+}
+
 module _technic_gear_double_sided_legacy(
 	teeth = 24,
 	gear_height = technic_gear_normal_height( "double" )
@@ -1312,51 +1343,18 @@ module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole 
 			// The hub of the gear.
 			translate( [ 0, 0, lip_height + base_height ] ) cylinder( d = hub_diameter, h = tooth_hub_height );
 
-			// The teeth.
-			// @todo Is the tooth width/depth/etc. a function of the number of teeth? Or the diameter of the gear? Or something else?
-			translate( [ 0, 0, base_height + lip_height ] ) {
-				let( inward_slant = ( technic_gear_12_tooth_tooth_width_at_bottom - technic_gear_12_tooth_tooth_width_at_top ) / 2 ) {
-					for ( i = [ 1 : teeth ] ) {
-						rotate( [ 0, 0, 360 / teeth * i ] ) {
-							rotate( [ 90, 0, 0 ] ) {
-								translate( [ 0, 0, -gear_diameter / 2 ] ) {
-									difference() {
-										linear_extrude( gear_diameter / 2 ) {
-											translate( [ -technic_gear_12_tooth_tooth_width_at_bottom / 2, 0, 0 ] ) polygon(
-												points = [
-													[ 0, 0 ],
-													[ technic_gear_12_tooth_tooth_width_at_bottom, 0 ],
-													[ technic_gear_12_tooth_tooth_width_at_bottom - inward_slant, tooth_hub_height ],
-													[ inward_slant, tooth_hub_height ],
-													[ 0, 0 ]
-												]
-											);
-										}
+			// The teeth. Use the shared module-1 involute solid; beveling is a
+			// separate exposed-face subtraction so the body-side profile remains full.
+			translate( [ 0, 0, lip_height + base_height + ( tooth_hub_height / 2 ) ] ) {
+				difference() {
+					technic_gear_normal_tooth_solid(
+						teeth = teeth,
+						height = tooth_hub_height,
+						bore_diameter = hub_diameter - ( EXTENSION_FOR_DIFFERENCE / 2 )
+					);
 
-										// Remove the bevel.
-										if ( bevel ) {
-											let( extra_offset_for_preview = 0.001 ) {
-												translate( [-technic_gear_12_tooth_tooth_width_at_bottom / 2 - extra_offset_for_preview, tooth_hub_height / 2 + extra_offset_for_preview, -extra_offset_for_preview ] ) {
-													rotate( [ 90, 0, 90 ] ) {
-														linear_extrude( technic_gear_12_tooth_tooth_width_at_bottom ) {
-															// The bevel is assumed to be a 45º cut that is half as tall as the tooth. This might be wrong.
-															polygon(
-																points = [
-																	[ 0, 0 ],
-																	[ tooth_hub_height / 2, 0 ],
-																	[ tooth_hub_height / 2, tooth_hub_height / 2 ],
-																	[ 0, 0 ]
-																]
-															);
-														}
-													}
-												}
-											}
-										}
-									}
-								}
-							}
-						}
+					if ( bevel ) {
+						technic_gear_single_bevel_cutter( teeth = teeth, height = tooth_hub_height );
 					}
 				}
 			}
