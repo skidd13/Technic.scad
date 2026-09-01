@@ -979,6 +979,126 @@ module technic_gear_supported_axle_cutout(
 }
 
 /**
+ * WP06C secondary-station selector constants.
+ *
+ * The placement grid is the union of two 8 mm phases. WP06A selected the
+ * offset phase for dense pin walls and derives centered-phase axle candidates
+ * from complete four-pin cells.
+ */
+technic_gear_secondary_lattice_pitch = 8;
+technic_gear_secondary_lattice_half_pitch = technic_gear_secondary_lattice_pitch / 2;
+technic_gear_secondary_bridge_overlap = 0.4;
+
+/** Usable classic body radius for secondary station envelopes. */
+function technic_gear_secondary_usable_radius( teeth ) =
+	technic_gear_classic_rim_inner_diameter( teeth ) / 2;
+
+/** True when one complete secondary pin wall fits at the final coordinate. */
+function technic_gear_secondary_pin_station_fits( teeth, point ) =
+	sqrt( point[0] * point[0] + point[1] * point[1] )
+		+ ( technic_gear_pin_hole_outer_diameter / 2 )
+		<= technic_gear_secondary_usable_radius( teeth );
+
+/** Generate the legal dense offset-phase pin field accepted by WP06A. */
+function technic_gear_secondary_pin_stations( teeth ) =
+	let(
+		half = technic_gear_secondary_lattice_half_pitch,
+		pitch = technic_gear_secondary_lattice_pitch,
+		usable = technic_gear_secondary_usable_radius( teeth ),
+		limit = floor( ( usable - ( technic_gear_pin_hole_outer_diameter / 2 ) - half ) / pitch ) + 1
+	)
+	[
+		for ( i = [ -limit : limit ] )
+			for ( j = [ -limit : limit ] )
+				let( point = [ half + pitch * i, half + pitch * j ] )
+				if ( technic_gear_secondary_pin_station_fits( teeth, point ) )
+					point
+	];
+
+function _technic_gear_point_in_list( point, points ) =
+	len( [ for ( candidate = points ) if ( candidate[0] == point[0] && candidate[1] == point[1] ) candidate ] ) > 0;
+
+/**
+ * A centered-phase axle candidate exists exactly when its four surrounding
+ * offset-phase pin stations exist. The singular center remains WP04-owned.
+ */
+function technic_gear_secondary_axle_cell_complete( center, pin_stations ) =
+	center != [ 0, 0 ]
+	&& _technic_gear_point_in_list( [ center[0] - 4, center[1] - 4 ], pin_stations )
+	&& _technic_gear_point_in_list( [ center[0] - 4, center[1] + 4 ], pin_stations )
+	&& _technic_gear_point_in_list( [ center[0] + 4, center[1] - 4 ], pin_stations )
+	&& _technic_gear_point_in_list( [ center[0] + 4, center[1] + 4 ], pin_stations );
+
+/** Select every complete non-central four-pin cell, as approved in WP06A. */
+function technic_gear_secondary_axle_stations( teeth ) =
+	let(
+		pins = technic_gear_secondary_pin_stations( teeth ),
+		pitch = technic_gear_secondary_lattice_pitch,
+		usable = technic_gear_secondary_usable_radius( teeth ),
+		limit = floor( usable / pitch )
+	)
+	[
+		for ( i = [ -limit : limit ] )
+			for ( j = [ -limit : limit ] )
+				let( center = [ pitch * i, pitch * j ] )
+				if ( technic_gear_secondary_axle_cell_complete( center, pins ) )
+					center
+	];
+
+/**
+ * Grid-aligned P1 support orientation nearest to the local tangent.
+ * Only 0/90 are valid by the accepted WP06B contract.
+ */
+function technic_gear_secondary_axle_support_orientation( point ) =
+	let(
+		x = point[0],
+		y = point[1],
+		radial_angle = atan2( y, x ),
+		tangent = ( radial_angle + 90 + 360 ) % 180,
+		d0 = min( abs( tangent ), abs( tangent - 180 ) ),
+		d90 = abs( tangent - 90 )
+	)
+	d0 < d90 ? 0 :
+	d90 < d0 ? 90 :
+	abs( x ) >= abs( y ) ? 0 : 90;
+
+/** Return the four pin stations that structurally define one axle cell. */
+function technic_gear_secondary_axle_cell_pins( center ) = [
+	[ center[0] - 4, center[1] - 4 ],
+	[ center[0] - 4, center[1] + 4 ],
+	[ center[0] + 4, center[1] - 4 ],
+	[ center[0] + 4, center[1] + 4 ]
+];
+
+/**
+ * Emit the exact WP06C selector manifest without instantiating gear geometry.
+ */
+module technic_gear_secondary_allocation_manifest( teeth ) {
+	pins = technic_gear_secondary_pin_stations( teeth );
+	axles = technic_gear_secondary_axle_stations( teeth );
+
+	echo( str( "TECHNIC_GEAR_SECONDARY|teeth=", teeth, "|pin_count=", len( pins ), "|axle_count=", len( axles ) ) );
+	echo( "TECHNIC_GEAR_SECONDARY_PINS", pins );
+	echo( "TECHNIC_GEAR_SECONDARY_AXLES", axles );
+	echo( "TECHNIC_GEAR_SECONDARY_SUPPORTS", [ for ( point = axles ) [ point, technic_gear_secondary_axle_support_orientation( point ) ] ] );
+	echo( "TECHNIC_GEAR_SECONDARY_CELLS", [ for ( point = axles ) [ point, technic_gear_secondary_axle_cell_pins( point ) ] ] );
+
+	assert( !_technic_gear_point_in_list( [ 0, 0 ], axles ), "secondary axle allocation must exclude center" );
+	assert(
+		len( [ for ( point = axles ) if ( _technic_gear_point_in_list( point, pins ) ) point ] ) == 0,
+		"secondary pin and axle sets must be disjoint"
+	);
+	assert(
+		len( [ for ( point = axles ) if ( !technic_gear_secondary_axle_cell_complete( point, pins ) ) point ] ) == 0,
+		"every selected secondary axle must own a complete four-pin cell"
+	);
+	assert(
+		len( [ for ( point = axles ) let( orientation = technic_gear_secondary_axle_support_orientation( point ) ) if ( orientation != 0 && orientation != 90 ) point ] ) == 0,
+		"secondary axle support orientation must be grid aligned"
+	);
+}
+
+/**
  * Positive material for the singular center connector.
  *
  * This module owns connector-local reinforcement only; the owning body remains
