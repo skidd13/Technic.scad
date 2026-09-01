@@ -924,13 +924,13 @@ module technic_gear(
 
 	normal_height = technic_gear_normal_height( axial_form );
 	requested_height = is_undef( gear_height ) ? normal_height : gear_height;
-	effective_height = axial_form == "double" || requested_height == normal_height ? requested_height : normal_height;
+	effective_height = requested_height;
 	effective_tooth_sections = "normal";
 	effective_bevel = axial_form == "single" ? ( bevel == "double" ? "single" : bevel ) : "none";
 	effective_body_mode = axial_form == "double" ? "reduced" : "filled";
 	effective_center = axial_form == "single" ? center : "axle";
 	effective_secondary_feature = axial_form == "double" ? "pin+axle" : "none";
-	height_state = effective_height == requested_height ? "supported" : "fallback";
+	height_state = "supported";
 	tooth_sections_state = tooth_sections == "normal" ? "supported" : "fallback";
 	bevel_state = bevel == effective_bevel ? "supported" : "fallback";
 	body_mode_state = body_mode == effective_body_mode ? "supported" : "fallback";
@@ -942,7 +942,7 @@ module technic_gear(
 
 	_technic_gear_support_record( "axial_form", axial_form, axial_form, "supported", "legacy-path", debug );
 	_technic_gear_support_record( "teeth", teeth, teeth, "supported", "legacy-path", debug );
-	_technic_gear_support_record( "gear_height", requested_height, effective_height, height_state, height_state == "supported" ? ( is_undef( gear_height ) ? "normal-default" : "legacy-height" ) : "single-custom-height-not-implemented", debug );
+	_technic_gear_support_record( "gear_height", requested_height, effective_height, height_state, is_undef( gear_height ) ? "normal-default" : "configured-height", debug );
 	_technic_gear_support_record( "tooth_sections", tooth_sections, effective_tooth_sections, tooth_sections_state, tooth_sections_state == "supported" ? "legacy-normal" : "stepped-not-implemented", debug );
 	_technic_gear_support_record( "bevel", bevel, effective_bevel, bevel_state, bevel_state == "supported" ? "legacy-path" : "bevel-not-implemented", debug );
 	_technic_gear_support_record( "body_mode", body_mode, effective_body_mode, body_mode_state, body_mode_state == "supported" ? "legacy-path" : "body-mode-not-implemented", debug );
@@ -950,10 +950,12 @@ module technic_gear(
 	_technic_gear_support_record( "center", center, effective_center, center_state, center_state == "supported" ? "legacy-path" : "double-pin-center-not-implemented", debug );
 	_technic_gear_support_record( "secondary_feature", secondary_feature, effective_secondary_feature, secondary_state, secondary_state == "supported" ? ( axial_form == "double" ? "legacy-fit-derived" : "legacy-none" ) : ( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" ? "clutch-not-implemented" : "secondary-feature-not-implemented" ), debug );
 
+	assert( technic_gear_axial_dimensions_valid( axial_form, effective_height ), str( "gear_height produces invalid axial dimensions: ", effective_height ) );
+
 	if ( axial_form == "double" ) {
-		_technic_gear_double_sided_legacy( teeth = teeth, width = effective_height / technic_gear_normal_height( "double" ) );
+		_technic_gear_double_sided_legacy( teeth = teeth, gear_height = effective_height );
 	} else {
-		_technic_gear_single_sided_legacy( teeth = teeth, bevel = effective_bevel == "single", center_hole = effective_center );
+		_technic_gear_single_sided_legacy( teeth = teeth, bevel = effective_bevel == "single", center_hole = effective_center, gear_height = effective_height );
 	}
 }
 
@@ -988,7 +990,7 @@ module technic_gear_double_sided(
 
 module _technic_gear_double_sided_legacy(
 	teeth = 24,
-	width = 1
+	gear_height = technic_gear_normal_height( "double" )
 ) {
 	include <lib/gears/gears.scad>;
 
@@ -998,16 +1000,17 @@ module _technic_gear_double_sided_legacy(
 	// * the difference between the tooth thickness and the wheel thickness.
 	// * the difference between the wheel thickness and the pin hole thickness.
 	// Calculate the remaining values based on these differences.
-	desired_gear_axle_reinforcement_thickness = width * technic_gear_axle_reinforcement_thickness;
-	desired_pin_hole_thickness = desired_gear_axle_reinforcement_thickness - ( technic_gear_axle_reinforcement_thickness - technic_gear_pin_hole_thickness );
-	desired_gear_tooth_thickness = desired_gear_axle_reinforcement_thickness - ( technic_gear_axle_reinforcement_thickness - technic_gear_tooth_thickness );
-	desired_gear_wheel_thickness = desired_gear_axle_reinforcement_thickness - ( technic_gear_axle_reinforcement_thickness - technic_gear_wheel_thickness );
+	desired_gear_axle_reinforcement_thickness = gear_height;
+	desired_pin_hole_thickness = technic_gear_double_secondary_wall_height( gear_height );
+	desired_gear_tooth_thickness = technic_gear_double_normal_tooth_section_height( gear_height );
+	desired_gear_wheel_thickness = technic_gear_double_reduced_body_height( gear_height );
 
-	// A gear is 1 inch wide for every 24 teeth.
-	gear_diameter = ( teeth / 24 ) * technic_gear_24_tooth_outer_diameter;
+	// Canonical module-1 envelope semantics. The legacy variable name is retained locally
+	// to minimize geometry churn while its meaning is now explicitly the tip diameter.
+	gear_diameter = technic_gear_tip_diameter( teeth );
 
-	// For the inner sunken area, use the measured size of a 24-tooth gear to scale it, always leaving the raised part near the teeth a constant size.
-	gear_inner_diameter = gear_diameter - ( technic_gear_24_tooth_outer_diameter - technic_gear_24_tooth_inner_diameter );
+	// Classic reduced-body rim relationship, kept separate from universal body/bore semantics.
+	gear_inner_diameter = technic_gear_classic_rim_inner_diameter( teeth );
 
 	// The diagonal distance from the center of the gear to the center of a pin hole in a 24-tooth gear is technic_gear_pin_hole_offset_from_center.
 	// This means the horizontal and vertical distances will be found via cosine 45º = X / technic_gear_pin_hole_offset_from_center. => ( 1 / sqrt( 2 ) ) = X / technic_gear_pin_hole_offset_from_center => technic_gear_pin_hole_offset_from_center / sqrt( 2 ) = X
@@ -1093,7 +1096,7 @@ module _technic_gear_double_sided_legacy(
 
 			// The gear function leaves very small gaps at the bottom corners of the teeth. Fill that all in.
 			difference() {
-				cylinder( d = gear_diameter - ( technic_gear_24_tooth_tooth_depth * 2 ), h = desired_gear_tooth_thickness, center = true );
+				cylinder( d = technic_gear_root_diameter( teeth ), h = desired_gear_tooth_thickness, center = true );
 				cylinder( d = gear_inner_diameter, h = desired_gear_tooth_thickness + EXTENSION_FOR_DIFFERENCE, center = true );
 			};
 
@@ -1260,7 +1263,10 @@ module technic_gear_single_sided( teeth = 12, bevel = true, center_hole = "axle"
 	);
 }
 
-module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole = "axle" ) {
+module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole = "axle", gear_height = technic_gear_normal_height( "single" ) ) {
+	lip_height = technic_gear_single_lip_height( gear_height );
+	base_height = technic_gear_single_base_height( gear_height );
+	tooth_hub_height = technic_gear_single_tooth_hub_height( gear_height );
 	// Gears appear to be one inch wide for every 24 teeth they have.
 	gear_diameter = ( teeth / 12 ) * technic_gear_12_tooth_gear_diameter;
 
@@ -1273,7 +1279,7 @@ module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole 
 	difference() {
 		union() {
 			// The lip that acts as a washer between the gear and a beam or brick.
-			linear_extrude( technic_gear_12_tooth_lip_thickness ) {
+			linear_extrude( lip_height ) {
 				difference() {
 					circle( d = technic_gear_12_tooth_lip_outer_diameter );
 					circle( d = technic_gear_12_tooth_lip_inner_diameter );
@@ -1281,14 +1287,14 @@ module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole 
 			}
 
 			// The base of the gear.
-			translate( [ 0, 0, technic_gear_12_tooth_lip_thickness ] ) cylinder( d = gear_diameter, h = technic_gear_12_tooth_base_thickness );
+			translate( [ 0, 0, lip_height ] ) cylinder( d = gear_diameter, h = base_height );
 
 			// The hub of the gear.
-			translate( [ 0, 0, technic_gear_12_tooth_lip_thickness + technic_gear_12_tooth_base_thickness ] ) cylinder( d = hub_diameter, h = technic_gear_12_tooth_tooth_thickness );
+			translate( [ 0, 0, lip_height + base_height ] ) cylinder( d = hub_diameter, h = tooth_hub_height );
 
 			// The teeth.
 			// @todo Is the tooth width/depth/etc. a function of the number of teeth? Or the diameter of the gear? Or something else?
-			translate( [ 0, 0, technic_gear_12_tooth_base_thickness + technic_gear_12_tooth_lip_thickness ] ) {
+			translate( [ 0, 0, base_height + lip_height ] ) {
 				let( inward_slant = ( technic_gear_12_tooth_tooth_width_at_bottom - technic_gear_12_tooth_tooth_width_at_top ) / 2 ) {
 					for ( i = [ 1 : teeth ] ) {
 						rotate( [ 0, 0, 360 / teeth * i ] ) {
@@ -1300,8 +1306,8 @@ module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole 
 												points = [
 													[ 0, 0 ],
 													[ technic_gear_12_tooth_tooth_width_at_bottom, 0 ],
-													[ technic_gear_12_tooth_tooth_width_at_bottom - inward_slant, technic_gear_12_tooth_tooth_height ],
-													[ inward_slant, technic_gear_12_tooth_tooth_height ],
+													[ technic_gear_12_tooth_tooth_width_at_bottom - inward_slant, tooth_hub_height ],
+													[ inward_slant, tooth_hub_height ],
 													[ 0, 0 ]
 												]
 											);
@@ -1310,15 +1316,15 @@ module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole 
 										// Remove the bevel.
 										if ( bevel ) {
 											let( extra_offset_for_preview = 0.001 ) {
-												translate( [-technic_gear_12_tooth_tooth_width_at_bottom / 2 - extra_offset_for_preview, technic_gear_12_tooth_tooth_height / 2 + extra_offset_for_preview, -extra_offset_for_preview ] ) {
+												translate( [-technic_gear_12_tooth_tooth_width_at_bottom / 2 - extra_offset_for_preview, tooth_hub_height / 2 + extra_offset_for_preview, -extra_offset_for_preview ] ) {
 													rotate( [ 90, 0, 90 ] ) {
 														linear_extrude( technic_gear_12_tooth_tooth_width_at_bottom ) {
 															// The bevel is assumed to be a 45º cut that is half as tall as the tooth. This might be wrong.
 															polygon(
 																points = [
 																	[ 0, 0 ],
-																	[ technic_gear_12_tooth_tooth_height / 2, 0 ],
-																	[ technic_gear_12_tooth_tooth_height / 2, technic_gear_12_tooth_tooth_height / 2 ],
+																	[ tooth_hub_height / 2, 0 ],
+																	[ tooth_hub_height / 2, tooth_hub_height / 2 ],
 																	[ 0, 0 ]
 																]
 															);
@@ -1340,14 +1346,14 @@ module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole 
 			// Remove the axle hole.
 			technic_axle_hole( height = 1 ); // @todo If we add a width/thickness option, it would replace 1 here.
 		} else if ( center_hole == "pin" ) {
-			translate( [ 0, 0, technic_gear_12_tooth_lip_thickness - ( EXTENSION_FOR_DIFFERENCE / 2 ) ] ) {
-				cylinder( d = min( technic_pin_connector_outer_diameter, technic_gear_12_tooth_lip_inner_diameter ), h = technic_gear_12_tooth_base_thickness + technic_gear_12_tooth_tooth_height + EXTENSION_FOR_DIFFERENCE );
+			translate( [ 0, 0, lip_height - ( EXTENSION_FOR_DIFFERENCE / 2 ) ] ) {
+				cylinder( d = min( technic_pin_connector_outer_diameter, technic_gear_12_tooth_lip_inner_diameter ), h = base_height + tooth_hub_height + EXTENSION_FOR_DIFFERENCE );
 			}
 		}
 	}
 
 	if ( center_hole == "pin" ) {
-		translate( [ 0, 0, technic_gear_12_tooth_lip_thickness ] ) {
+		translate( [ 0, 0, lip_height ] ) {
 			technic_pin_connector( length = 1 );
 		}
 	}
