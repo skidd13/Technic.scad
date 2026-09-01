@@ -854,11 +854,42 @@ function technic_gear_normal_height( axial_form ) =
 /** Double-axial secondary connector-wall height derived from gear_height. */
 function technic_gear_double_secondary_wall_height( gear_height ) = gear_height - 1.63;
 
-/** Double-axial normal tooth-section height derived from gear_height. */
-function technic_gear_double_normal_tooth_section_height( gear_height ) = gear_height - 4.03;
+/** Established fixed axial reduction applied only to genuinely reduced double teeth. */
+technic_gear_double_reduced_tooth_axial_offset = 4.03;
+
+/** Reduced-only double normal tooth-section height. */
+function technic_gear_double_reduced_tooth_section_height( gear_height ) =
+	gear_height - technic_gear_double_reduced_tooth_axial_offset;
+
+/** Topology-dispatched double normal tooth-section height. */
+function technic_gear_double_tooth_section_height( gear_height, resolved_body_topology ) =
+	resolved_body_topology == "reduced"
+		? technic_gear_double_reduced_tooth_section_height( gear_height )
+		: resolved_body_topology == "solid" || resolved_body_topology == "hollow"
+			? gear_height
+			: assert( false, str( "invalid resolved body topology: ", resolved_body_topology ) );
 
 /** Double-axial reduced continuous-body height derived from gear_height. */
 function technic_gear_double_reduced_body_height( gear_height ) = gear_height - 6.43;
+
+/**
+ * Reference axial proportions for normal double-bevel teeth.
+ * The LDraw tooth primitive spans -10..+10 axially and preserves its
+ * straight central tooth land from -3..+3. Keep these as source-derived
+ * proportions rather than independent millimetre tuning knobs.
+ */
+technic_gear_double_bevel_reference_total_axial_units = 20;
+technic_gear_double_bevel_reference_uncut_axial_units = 6;
+
+/** Straight central tooth-land height retained by a double bevel. */
+function technic_gear_double_bevel_uncut_height( tooth_height ) =
+	tooth_height
+	* technic_gear_double_bevel_reference_uncut_axial_units
+	/ technic_gear_double_bevel_reference_total_axial_units;
+
+/** Axial depth owned by each exposed-face cutter of a double bevel. */
+function technic_gear_double_bevel_face_depth( tooth_height ) =
+	( tooth_height - technic_gear_double_bevel_uncut_height( tooth_height ) ) / 2;
 
 /** Single-axial lip height derived proportionally from gear_height. */
 function technic_gear_single_lip_height( gear_height ) = gear_height * ( 0.8 / 3.6 );
@@ -872,13 +903,19 @@ function technic_gear_single_tooth_hub_height( gear_height ) = gear_height * ( 2
 /**
  * Return whether all owned axial dimensions are positive before geometry work.
  */
-function technic_gear_axial_dimensions_valid( axial_form, gear_height ) =
+function technic_gear_axial_dimensions_valid( axial_form, gear_height, resolved_body_topology = undef ) =
 	is_num( gear_height ) && gear_height > 0
 	&& (
 		axial_form == "double"
 			? technic_gear_double_secondary_wall_height( gear_height ) > 0
-				&& technic_gear_double_normal_tooth_section_height( gear_height ) > 0
-				&& technic_gear_double_reduced_body_height( gear_height ) > 0
+				&& (
+					resolved_body_topology == "reduced"
+						? technic_gear_double_reduced_tooth_section_height( gear_height ) > 0
+							&& technic_gear_double_reduced_body_height( gear_height ) > 0
+						: resolved_body_topology == "solid" || resolved_body_topology == "hollow"
+							? true
+							: false
+				)
 			: axial_form == "single"
 				? technic_gear_single_lip_height( gear_height ) > 0
 					&& technic_gear_single_base_height( gear_height ) > 0
@@ -1126,7 +1163,8 @@ function technic_gear_axle_support_fits( teeth, point, orientation, minimum_clea
  * Compact bodies whose complete center P1 footprint cannot exist are treated
  * as already-solid local material; this derives the D08 policy geometrically.
  */
-function technic_gear_axle_body_topology( teeth, body_mode ) =
+function technic_gear_double_body_topology( teeth, body_mode ) =
+	body_mode == "hollow" ? "hollow" :
 	body_mode == "reduced"
 		&& technic_gear_axle_support_fits( teeth, [ 0, 0 ], 0 )
 		? "reduced" : "solid";
@@ -1190,17 +1228,16 @@ function technic_gear_axle_station_record( teeth, point, orientation, body_mode,
 	];
 
 /** One composition-time registry for center plus selected secondary axle records. */
-function technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode ) =
-	let( topology = technic_gear_axle_body_topology( teeth, body_mode ) )
+function technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode, resolved_body_topology ) =
 	concat(
 		center == "axle"
-			? [ technic_gear_axle_station_record( teeth, [ 0, 0 ], 0, body_mode, topology, "center" ) ]
+			? [ technic_gear_axle_station_record( teeth, [ 0, 0 ], 0, body_mode, resolved_body_topology, "center" ) ]
 			: [],
 		secondary_feature == "axle" || secondary_feature == "pin+axle"
 			? [ for ( point = technic_gear_secondary_axle_stations( teeth ) )
 				technic_gear_axle_station_record(
 					teeth, point, technic_gear_secondary_axle_support_orientation( point ),
-					body_mode, topology, "secondary"
+					body_mode, resolved_body_topology, "secondary"
 				) ]
 			: []
 	);
@@ -1263,9 +1300,10 @@ function _technic_gear_station_coordinate_seen_before( records, index, prior = 0
 /** Machine-readable station/component applicability manifest. */
 module technic_gear_axle_station_manifest( teeth, center = "axle", secondary_feature = "pin+axle", body_mode = "reduced" ) {
 	effective_secondary = technic_gear_secondary_effective_feature( teeth, secondary_feature );
-	records = technic_gear_axle_station_records( teeth, center, effective_secondary, body_mode );
+	resolved_body_topology = technic_gear_double_body_topology( teeth, body_mode );
+	records = technic_gear_axle_station_records( teeth, center, effective_secondary, body_mode, resolved_body_topology );
 
-	echo( "TECHNIC_GEAR_AXLE_TOPOLOGY", technic_gear_axle_body_topology( teeth, body_mode ) );
+	echo( "TECHNIC_GEAR_AXLE_TOPOLOGY", resolved_body_topology );
 	echo( "TECHNIC_GEAR_EFFECTIVE_SECONDARY", effective_secondary );
 	echo( "TECHNIC_GEAR_AXLE_REGISTRY", records );
 
@@ -1440,9 +1478,15 @@ module technic_gear(
 	requested_height = is_undef( gear_height ) ? normal_height : gear_height;
 	effective_height = requested_height;
 	effective_tooth_sections = "normal";
-	effective_bevel = axial_form == "single" ? ( bevel == "double" ? "single" : bevel ) : "none";
+	effective_bevel = axial_form == "single" ? ( bevel == "double" ? "single" : bevel ) : ( bevel == "double" ? "double" : "none" );
 	legacy_body_mode = axial_form == "double" ? "reduced" : "filled";
-	effective_body_mode = body_mode == "hollow" ? "hollow" : legacy_body_mode;
+	// Do not substitute a reduced double body for an explicitly requested filled
+	// or hollow topology. Unsupported double topologies stay visible as missing.
+	effective_body_mode = axial_form == "double"
+		? body_mode
+		: body_mode == "hollow" ? "hollow" : legacy_body_mode;
+	resolved_body_topology = axial_form == "double" ? technic_gear_double_body_topology( teeth, body_mode ) : "single";
+	resolved_tooth_height = axial_form == "double" ? technic_gear_double_tooth_section_height( effective_height, resolved_body_topology ) : technic_gear_single_tooth_hub_height( effective_height );
 	effective_center = center;
 	effective_secondary_feature = axial_form == "double"
 		? technic_gear_secondary_effective_feature( teeth, secondary_feature )
@@ -1450,7 +1494,9 @@ module technic_gear(
 	height_state = "supported";
 	tooth_sections_state = tooth_sections == "normal" ? "supported" : "fallback";
 	bevel_state = bevel == effective_bevel ? "supported" : "fallback";
-	body_mode_state = body_mode == "hollow" ? "missing" : ( body_mode == effective_body_mode ? "supported" : "fallback" );
+	body_mode_state = axial_form == "double"
+		? ( body_mode == "reduced" ? "supported" : "missing" )
+		: body_mode == "hollow" ? "missing" : ( body_mode == effective_body_mode ? "supported" : "fallback" );
 	center_state = "supported";
 	secondary_state = axial_form == "double"
 		? ( secondary_feature == effective_secondary_feature ? "supported" :
@@ -1464,8 +1510,14 @@ module technic_gear(
 	_technic_gear_support_record( "teeth", teeth, teeth, "supported", "legacy-path", debug );
 	_technic_gear_support_record( "gear_height", requested_height, effective_height, height_state, is_undef( gear_height ) ? "normal-default" : "configured-height", debug );
 	_technic_gear_support_record( "tooth_sections", tooth_sections, effective_tooth_sections, tooth_sections_state, tooth_sections_state == "supported" ? "legacy-normal" : "stepped-not-implemented", debug );
-	_technic_gear_support_record( "bevel", bevel, effective_bevel, bevel_state, bevel_state == "supported" ? "legacy-path" : "bevel-not-implemented", debug );
-	_technic_gear_support_record( "body_mode", body_mode, effective_body_mode, body_mode_state, body_mode_state == "supported" ? "body-dispatcher" : ( body_mode_state == "missing" ? "hollow-not-implemented" : "body-mode-not-implemented" ), debug );
+	_technic_gear_support_record( "bevel", bevel, effective_bevel, bevel_state, bevel_state == "supported" ? ( axial_form == "double" && effective_bevel == "double" ? "wp07-double-bevel" : "legacy-path" ) : "bevel-not-implemented", debug );
+	_technic_gear_support_record(
+		"body_mode", body_mode, effective_body_mode, body_mode_state,
+		body_mode_state == "supported" ? "body-dispatcher" :
+		body_mode_state == "missing" ? ( body_mode == "hollow" ? "hollow-not-implemented" : "filled-double-not-implemented" ) :
+		"body-mode-not-implemented",
+		debug
+	);
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
 	_technic_gear_support_record( "center", center, effective_center, center_state, axial_form == "double" && center == "pin" ? "cross-interface-reuse" : "legacy-path", debug );
 	_technic_gear_support_record(
@@ -1476,13 +1528,25 @@ module technic_gear(
 		debug
 	);
 
-	assert( technic_gear_axial_dimensions_valid( axial_form, effective_height ), str( "gear_height produces invalid axial dimensions: ", effective_height ) );
+	if ( debug && axial_form == "double" ) {
+		echo( str(
+			"TECHNIC_GEAR_AXIAL|gear_height=", effective_height,
+			"|topology=", resolved_body_topology,
+			"|tooth_height=", resolved_tooth_height,
+			"|tooth_offset=", effective_height - resolved_tooth_height
+		) );
+	}
+
+	assert( technic_gear_axial_dimensions_valid( axial_form, effective_height, axial_form == "double" ? resolved_body_topology : undef ), str( "gear_height produces invalid axial dimensions: ", effective_height ) );
 	assert( technic_gear_center_radial_clearance_valid( effective_center, axial_form, teeth ), str( "center connector lacks radial clearance: center=", effective_center, ", axial_form=", axial_form, ", teeth=", teeth ) );
 
 	if ( axial_form == "double" ) {
 		_technic_gear_double_sided_legacy(
 			teeth = teeth, gear_height = effective_height, center = effective_center,
-			body_mode = effective_body_mode, secondary_feature = effective_secondary_feature
+			body_mode = effective_body_mode, secondary_feature = effective_secondary_feature,
+			resolved_body_topology = resolved_body_topology,
+			resolved_tooth_height = resolved_tooth_height,
+			bevel = effective_bevel
 		);
 	} else {
 		_technic_gear_single_sided_legacy( teeth = teeth, bevel = effective_bevel == "single", center_hole = effective_center, gear_height = effective_height, body_mode = effective_body_mode );
@@ -1576,23 +1640,50 @@ module technic_gear_single_bevel_cutter(
 	}
 }
 
+/**
+ * Generate the symmetric two-face bevel cutter for normal double-form teeth.
+ *
+ * Each exposed face reuses the approved WP03B single-face cutter only over
+ * the source-derived face depth, preserving a straight central tooth land.
+ */
+module technic_gear_double_bevel_cutter(
+	teeth,
+	height
+) {
+	bevel_depth = technic_gear_double_bevel_face_depth( height );
+	bevel_center_offset = ( height / 2 ) - ( bevel_depth / 2 );
+
+	translate( [ 0, 0, bevel_center_offset ] ) {
+		technic_gear_single_bevel_cutter( teeth = teeth, height = bevel_depth );
+	}
+
+	mirror( [ 0, 0, 1 ] ) {
+		translate( [ 0, 0, bevel_center_offset ] ) {
+			technic_gear_single_bevel_cutter( teeth = teeth, height = bevel_depth );
+		}
+	}
+}
+
 module _technic_gear_double_sided_legacy(
 	teeth = 24,
 	gear_height = technic_gear_normal_height( "double" ),
 	center = "axle",
 	body_mode = "reduced",
-	secondary_feature = "pin+axle"
+	secondary_feature = "pin+axle",
+	resolved_body_topology = "reduced",
+	resolved_tooth_height = technic_gear_double_reduced_tooth_section_height( technic_gear_normal_height( "double" ) ),
+	bevel = "none"
 ) {
 	include <lib/gears/gears.scad>;
 
 	desired_gear_axle_reinforcement_thickness = gear_height;
 	desired_pin_hole_thickness = technic_gear_double_secondary_wall_height( gear_height );
-	desired_gear_tooth_thickness = technic_gear_double_normal_tooth_section_height( gear_height );
+	desired_gear_tooth_thickness = resolved_tooth_height;
 	gear_inner_diameter = technic_gear_classic_rim_inner_diameter( teeth );
 
 	// Resolve the combined station registry once. Both boolean operands consume
 	// this exact value so center and secondary geometry cannot drift.
-	axle_records = technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode );
+	axle_records = technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode, resolved_body_topology );
 
 	// Preserve the accepted WP05 nested body boolean ownership.
 	difference() {
@@ -1618,11 +1709,26 @@ module _technic_gear_double_sided_legacy(
 				);
 			}
 
-			technic_gear_normal_tooth_solid(
-				teeth = teeth,
-				height = desired_gear_tooth_thickness,
-				bore_diameter = gear_inner_diameter + ( EXTENSION_FOR_DIFFERENCE / 2 )
-			);
+			if ( bevel == "double" ) {
+				difference() {
+					technic_gear_normal_tooth_solid(
+						teeth = teeth,
+						height = desired_gear_tooth_thickness,
+						bore_diameter = gear_inner_diameter + ( EXTENSION_FOR_DIFFERENCE / 2 )
+					);
+
+					technic_gear_double_bevel_cutter(
+						teeth = teeth,
+						height = desired_gear_tooth_thickness
+					);
+				}
+			} else {
+				technic_gear_normal_tooth_solid(
+					teeth = teeth,
+					height = desired_gear_tooth_thickness,
+					bore_diameter = gear_inner_diameter + ( EXTENSION_FOR_DIFFERENCE / 2 )
+				);
+			}
 
 			technic_gear_place_axle_stations(
 				records = axle_records, height = desired_gear_axle_reinforcement_thickness,
