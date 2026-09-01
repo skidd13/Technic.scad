@@ -955,27 +955,13 @@ module technic_gear_axle_entry_relief_cutout(
 }
 
 /**
- * Canonical negative cutter for one P1-supported secondary axle station.
+ * Geometry-only fixed-phase axle hole used by double-form axle stations.
  *
- * The functional axle cross is invariant and is never rotated with the
- * support. Only the shallow entry relief follows the selected P1 support
- * orientation.
+ * The native Technic axle-hole phase is authoritative. Placement/support
+ * orientation must never rotate this helper.
  */
-module technic_gear_supported_axle_cutout(
-	height,
-	relief_length = technic_gear_axle_reinforcement_width - technic_pin_connector_shoulder_wall_thickness,
-	support_orientation = 0
-) {
-	assert(
-		support_orientation == 0 || support_orientation == 90,
-		str( "secondary axle support orientation must be 0 or 90 degrees: ", support_orientation )
-	);
-
+module technic_gear_axle_hole_fixed( height ) {
 	technic_axle_hole( height = height );
-
-	rotate( [ 0, 0, support_orientation ] ) {
-		technic_gear_axle_entry_relief_cutout( height = height, length = relief_length );
-	}
 }
 
 /**
@@ -1097,6 +1083,199 @@ module technic_gear_secondary_allocation_manifest( teeth ) {
 		"secondary axle support orientation must be grid aligned"
 	);
 }
+
+/** WP06D-R2 approved positive minimum wall/clearance. */
+technic_gear_axle_station_minimum_clearance = technic_pin_connector_shoulder_wall_thickness;
+
+/** Half extents of an oriented local rectangle. */
+function technic_gear_oriented_half_extents( width, height, orientation ) =
+	orientation == 0 ? [ width / 2, height / 2 ] :
+	orientation == 90 ? [ height / 2, width / 2 ] :
+	assert( false, str( "axle station orientation must be 0 or 90 degrees: ", orientation ) );
+
+/** Maximum radial extent of a complete oriented rectangular footprint. */
+function technic_gear_oriented_rectangle_outer_radius( point, width, height, orientation ) =
+	let( half = technic_gear_oriented_half_extents( width, height, orientation ) )
+	max( [
+		for ( sx = [ -1, 1 ] )
+			for ( sy = [ -1, 1 ] )
+				sqrt(
+					( point[0] + sx * half[0] ) * ( point[0] + sx * half[0] )
+					+ ( point[1] + sy * half[1] ) * ( point[1] + sy * half[1] )
+				)
+	] );
+
+/** Root-side structural envelope available to full-height local support. */
+function technic_gear_axle_structural_radius( teeth ) = technic_gear_root_diameter( teeth ) / 2;
+
+/** Inner boundary of the full-height tooth-support ring. */
+function technic_gear_tooth_support_ring_inner_radius( teeth ) = technic_gear_classic_rim_inner_diameter( teeth ) / 2;
+
+/** Complete P1 footprint fit check, independent of station role/tooth special cases. */
+function technic_gear_axle_support_fits( teeth, point, orientation, minimum_clearance = technic_gear_axle_station_minimum_clearance ) =
+	technic_gear_axle_structural_radius( teeth )
+		- technic_gear_oriented_rectangle_outer_radius(
+			point,
+			technic_gear_axle_reinforcement_width,
+			technic_gear_axle_reinforcement_height,
+			orientation
+		) >= minimum_clearance;
+
+/**
+ * Resolve the local double-body topology used by axle applicability.
+ * Compact bodies whose complete center P1 footprint cannot exist are treated
+ * as already-solid local material; this derives the D08 policy geometrically.
+ */
+function technic_gear_axle_body_topology( teeth, body_mode ) =
+	body_mode == "reduced"
+		&& technic_gear_axle_support_fits( teeth, [ 0, 0 ], 0 )
+		? "reduced" : "solid";
+
+/** P1 reinforcement is required only for genuinely reduced local topology. */
+function technic_gear_axle_support_required( resolved_body_topology ) = resolved_body_topology == "reduced";
+
+/** Complete transformed relief footprint radial extent. */
+function technic_gear_axle_relief_outer_radius( point, orientation ) =
+	technic_gear_oriented_rectangle_outer_radius(
+		point,
+		technic_gear_axle_reinforcement_width - technic_pin_connector_shoulder_wall_thickness,
+		( technic_axle_spline_thickness * technic_axle_interference_fit_ratio ) / 3,
+		orientation
+	);
+
+function technic_gear_axle_relief_body_gap( teeth, point, orientation ) =
+	technic_gear_axle_structural_radius( teeth ) - technic_gear_axle_relief_outer_radius( point, orientation );
+
+function technic_gear_axle_relief_ring_gap( teeth, point, orientation ) =
+	technic_gear_tooth_support_ring_inner_radius( teeth ) - technic_gear_axle_relief_outer_radius( point, orientation );
+
+function technic_gear_axle_relief_fits_body( teeth, point, orientation, minimum_clearance = technic_gear_axle_station_minimum_clearance ) =
+	technic_gear_axle_relief_body_gap( teeth, point, orientation ) >= minimum_clearance;
+
+function technic_gear_axle_relief_clears_tooth_ring( teeth, point, orientation, body_mode, minimum_clearance = technic_gear_axle_station_minimum_clearance ) =
+	body_mode != "reduced"
+	|| technic_gear_axle_relief_ring_gap( teeth, point, orientation ) >= minimum_clearance;
+
+function technic_gear_axle_relief_fits( teeth, point, orientation, body_mode, minimum_clearance = technic_gear_axle_station_minimum_clearance ) =
+	technic_gear_axle_relief_fits_body( teeth, point, orientation, minimum_clearance )
+	&& technic_gear_axle_relief_clears_tooth_ring( teeth, point, orientation, body_mode, minimum_clearance );
+
+/** Effective secondary feature selected from actual WP06C capacity. */
+function technic_gear_secondary_effective_feature( teeth, requested ) =
+	requested == "none" ? "none" :
+	requested == "pin" ? ( len( technic_gear_secondary_pin_stations( teeth ) ) > 0 ? "pin" : "none" ) :
+	requested == "axle" ? ( len( technic_gear_secondary_axle_stations( teeth ) ) > 0 ? "axle" : "none" ) :
+	requested == "pin+axle" ?
+		( len( technic_gear_secondary_axle_stations( teeth ) ) > 0 ? "pin+axle" :
+		  len( technic_gear_secondary_pin_stations( teeth ) ) > 0 ? "pin" : "none" ) :
+	"none";
+
+/** Build one axle station with all applicability resolved before placement. */
+function technic_gear_axle_station_record( teeth, point, orientation, body_mode, resolved_body_topology, role ) =
+	let(
+		support_required = technic_gear_axle_support_required( resolved_body_topology ),
+		support_fits = technic_gear_axle_support_fits( teeth, point, orientation ),
+		emit_support = support_required && support_fits,
+		relief_fits_body = technic_gear_axle_relief_fits_body( teeth, point, orientation ),
+		relief_clears_ring = technic_gear_axle_relief_clears_tooth_ring( teeth, point, orientation, body_mode ),
+		emit_relief = emit_support && relief_fits_body && relief_clears_ring,
+		relief_outer_radius = technic_gear_axle_relief_outer_radius( point, orientation ),
+		ring_inner_radius = technic_gear_tooth_support_ring_inner_radius( teeth ),
+		ring_gap = ring_inner_radius - relief_outer_radius
+	)
+	[
+		point[0], point[1], orientation, emit_support, emit_relief, role,
+		support_required, support_fits, relief_fits_body, relief_clears_ring,
+		relief_outer_radius, ring_inner_radius, ring_gap, technic_gear_axle_station_minimum_clearance
+	];
+
+/** One composition-time registry for center plus selected secondary axle records. */
+function technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode ) =
+	let( topology = technic_gear_axle_body_topology( teeth, body_mode ) )
+	concat(
+		center == "axle"
+			? [ technic_gear_axle_station_record( teeth, [ 0, 0 ], 0, body_mode, topology, "center" ) ]
+			: [],
+		secondary_feature == "axle" || secondary_feature == "pin+axle"
+			? [ for ( point = technic_gear_secondary_axle_stations( teeth ) )
+				technic_gear_axle_station_record(
+					teeth, point, technic_gear_secondary_axle_support_orientation( point ),
+					body_mode, topology, "secondary"
+				) ]
+			: []
+	);
+
+/**
+ * Sole production placement path for all three independent axle helpers.
+ * Geometry policy is precomputed in the station flags; role never selects geometry.
+ */
+module technic_gear_place_axle_stations( records, height, operand ) {
+	assert( operand == "positive" || operand == "negative", str( "invalid axle station operand: ", operand ) );
+
+	for ( station = records ) {
+		translate( [ station[0], station[1], 0 ] ) {
+			if ( operand == "positive" && station[3] ) {
+				rotate( [ 0, 0, station[2] ] ) {
+					technic_gear_axle_support( height = height );
+				}
+			}
+
+			if ( operand == "negative" ) {
+				technic_gear_axle_hole_fixed( height = height );
+
+				if ( station[4] ) {
+					rotate( [ 0, 0, station[2] ] ) {
+						technic_gear_axle_entry_relief_cutout( height = height );
+					}
+				}
+			}
+		}
+	}
+}
+
+/** Dense selected pin-wall positives. */
+module technic_gear_secondary_pins_positive( teeth, secondary_feature, height ) {
+	if ( secondary_feature == "pin" || secondary_feature == "pin+axle" ) {
+		for ( point = technic_gear_secondary_pin_stations( teeth ) ) {
+			translate( [ point[0], point[1], 0 ] ) {
+				cylinder( d = technic_gear_pin_hole_outer_diameter, h = height, center = true );
+			}
+		}
+	}
+}
+
+/** Dense selected pin bores. */
+module technic_gear_secondary_pins_negative( teeth, secondary_feature, height ) {
+	if ( secondary_feature == "pin" || secondary_feature == "pin+axle" ) {
+		for ( point = technic_gear_secondary_pin_stations( teeth ) ) {
+			translate( [ point[0], point[1], 0 ] ) {
+				cylinder( d = technic_hole_diameter, h = height + EXTENSION_FOR_DIFFERENCE, center = true );
+			}
+		}
+	}
+}
+
+function _technic_gear_station_coordinate_seen_before( records, index, prior = 0 ) =
+	prior >= index ? false :
+	( records[prior][0] == records[index][0] && records[prior][1] == records[index][1] ) ? true :
+	_technic_gear_station_coordinate_seen_before( records, index, prior + 1 );
+
+/** Machine-readable station/component applicability manifest. */
+module technic_gear_axle_station_manifest( teeth, center = "axle", secondary_feature = "pin+axle", body_mode = "reduced" ) {
+	effective_secondary = technic_gear_secondary_effective_feature( teeth, secondary_feature );
+	records = technic_gear_axle_station_records( teeth, center, effective_secondary, body_mode );
+
+	echo( "TECHNIC_GEAR_AXLE_TOPOLOGY", technic_gear_axle_body_topology( teeth, body_mode ) );
+	echo( "TECHNIC_GEAR_EFFECTIVE_SECONDARY", effective_secondary );
+	echo( "TECHNIC_GEAR_AXLE_REGISTRY", records );
+
+	assert( len( [ for ( r = records ) if ( r[0] == 0 && r[1] == 0 ) r ] ) == ( center == "axle" ? 1 : 0 ), "combined axle registry center count mismatch" );
+	assert( len( [ for ( r = records ) if ( r[2] != 0 && r[2] != 90 ) r ] ) == 0, "combined axle registry orientation must be 0/90" );
+	assert( len( [ for ( i = [ 0 : len( records ) - 1 ] ) if ( _technic_gear_station_coordinate_seen_before( records, i ) ) i ] ) == 0, "combined axle registry contains duplicate coordinates" );
+	assert( len( [ for ( r = records ) if ( r[4] && !r[3] ) r ] ) == 0, "entry relief requires P1 support" );
+	assert( len( [ for ( r = records ) if ( body_mode == "reduced" && r[4] && r[12] < r[13] ) r ] ) == 0, "enabled relief violates tooth-support-ring clearance" );
+}
+
 
 /**
  * Positive material for the singular center connector.
@@ -1265,13 +1444,18 @@ module technic_gear(
 	legacy_body_mode = axial_form == "double" ? "reduced" : "filled";
 	effective_body_mode = body_mode == "hollow" ? "hollow" : legacy_body_mode;
 	effective_center = center;
-	effective_secondary_feature = axial_form == "double" ? "pin+axle" : "none";
+	effective_secondary_feature = axial_form == "double"
+		? technic_gear_secondary_effective_feature( teeth, secondary_feature )
+		: "none";
 	height_state = "supported";
 	tooth_sections_state = tooth_sections == "normal" ? "supported" : "fallback";
 	bevel_state = bevel == effective_bevel ? "supported" : "fallback";
 	body_mode_state = body_mode == "hollow" ? "missing" : ( body_mode == effective_body_mode ? "supported" : "fallback" );
 	center_state = "supported";
-	secondary_state = secondary_feature == effective_secondary_feature ? "supported" : "fallback";
+	secondary_state = axial_form == "double"
+		? ( secondary_feature == effective_secondary_feature ? "supported" :
+			_technic_gear_value_in( secondary_feature, [ "none", "pin", "axle", "pin+axle" ] ) ? "partial" : "fallback" )
+		: ( secondary_feature == "none" ? "supported" : "fallback" );
 	hollow_effective = body_mode == "hollow" ? hollow_structure : "inactive";
 	hollow_state = body_mode == "hollow" ? "missing" : "derived";
 	hollow_reason = body_mode == "hollow" ? "hollow-not-implemented" : "body-not-hollow";
@@ -1284,13 +1468,22 @@ module technic_gear(
 	_technic_gear_support_record( "body_mode", body_mode, effective_body_mode, body_mode_state, body_mode_state == "supported" ? "body-dispatcher" : ( body_mode_state == "missing" ? "hollow-not-implemented" : "body-mode-not-implemented" ), debug );
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
 	_technic_gear_support_record( "center", center, effective_center, center_state, axial_form == "double" && center == "pin" ? "cross-interface-reuse" : "legacy-path", debug );
-	_technic_gear_support_record( "secondary_feature", secondary_feature, effective_secondary_feature, secondary_state, secondary_state == "supported" ? ( axial_form == "double" ? "legacy-fit-derived" : "legacy-none" ) : ( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" ? "clutch-not-implemented" : "secondary-feature-not-implemented" ), debug );
+	_technic_gear_support_record(
+		"secondary_feature", secondary_feature, effective_secondary_feature, secondary_state,
+		secondary_state == "supported" ? ( axial_form == "double" ? "wp06c-capacity" : "legacy-none" ) :
+		secondary_state == "partial" ? "geometry-capacity" :
+		( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" ? "clutch-not-implemented" : "secondary-feature-not-implemented" ),
+		debug
+	);
 
 	assert( technic_gear_axial_dimensions_valid( axial_form, effective_height ), str( "gear_height produces invalid axial dimensions: ", effective_height ) );
 	assert( technic_gear_center_radial_clearance_valid( effective_center, axial_form, teeth ), str( "center connector lacks radial clearance: center=", effective_center, ", axial_form=", axial_form, ", teeth=", teeth ) );
 
 	if ( axial_form == "double" ) {
-		_technic_gear_double_sided_legacy( teeth = teeth, gear_height = effective_height, center = effective_center, body_mode = effective_body_mode );
+		_technic_gear_double_sided_legacy(
+			teeth = teeth, gear_height = effective_height, center = effective_center,
+			body_mode = effective_body_mode, secondary_feature = effective_secondary_feature
+		);
 	} else {
 		_technic_gear_single_sided_legacy( teeth = teeth, bevel = effective_bevel == "single", center_hole = effective_center, gear_height = effective_height, body_mode = effective_body_mode );
 	}
@@ -1387,38 +1580,25 @@ module _technic_gear_double_sided_legacy(
 	teeth = 24,
 	gear_height = technic_gear_normal_height( "double" ),
 	center = "axle",
-	body_mode = "reduced"
+	body_mode = "reduced",
+	secondary_feature = "pin+axle"
 ) {
 	include <lib/gears/gears.scad>;
 
-	// The overall widest part of a gear is the axle reinforcement.
-	// For determining the other widths (thicknesses), the constants are:
-	// * the difference between the axle reinforcement thickness and the pin hole thickness.
-	// * the difference between the tooth thickness and the wheel thickness.
-	// * the difference between the wheel thickness and the pin hole thickness.
-	// Calculate the remaining values based on these differences.
 	desired_gear_axle_reinforcement_thickness = gear_height;
 	desired_pin_hole_thickness = technic_gear_double_secondary_wall_height( gear_height );
 	desired_gear_tooth_thickness = technic_gear_double_normal_tooth_section_height( gear_height );
-	desired_gear_wheel_thickness = technic_gear_double_reduced_body_height( gear_height );
-
-	// Canonical module-1 envelope semantics. The legacy variable name is retained locally
-	// to minimize geometry churn while its meaning is now explicitly the tip diameter.
-	gear_diameter = technic_gear_tip_diameter( teeth );
-
-	// Classic reduced-body rim relationship, kept separate from universal body/bore semantics.
 	gear_inner_diameter = technic_gear_classic_rim_inner_diameter( teeth );
 
-	// The diagonal distance from the center of the gear to the center of a pin hole in a 24-tooth gear is technic_gear_pin_hole_offset_from_center.
-	// This means the horizontal and vertical distances will be found via cosine 45º = X / technic_gear_pin_hole_offset_from_center. => ( 1 / sqrt( 2 ) ) = X / technic_gear_pin_hole_offset_from_center => technic_gear_pin_hole_offset_from_center / sqrt( 2 ) = X
-	technic_gear_pin_hole_horizontal_offset_from_center = technic_gear_pin_hole_offset_from_center / sqrt(2);
+	// Resolve the combined station registry once. Both boolean operands consume
+	// this exact value so center and secondary geometry cannot drift.
+	axle_records = technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode );
 
+	// Preserve the accepted WP05 nested body boolean ownership.
 	difference() {
 		union() {
-			// The central hub,
 			difference() {
-				union () {
-					// Positive continuous body material is owned by the WP05 body dispatcher.
+				union() {
 					technic_gear_body_positive(
 						axial_form = "double",
 						body_mode = body_mode,
@@ -1426,223 +1606,46 @@ module _technic_gear_double_sided_legacy(
 						gear_height = gear_height
 					);
 
-					// The walls of the pin holes
-					union () {
-						rotate( [ 0, 0, 45 ] ) {
-							for ( x = [ technic_gear_pin_hole_horizontal_offset_from_center : technic_gear_pin_hole_horizontal_offset_from_center * 2 : gear_inner_diameter / 2 ] ) {
-								for ( y = [ technic_gear_pin_hole_horizontal_offset_from_center : technic_gear_pin_hole_horizontal_offset_from_center * 2 : ( gear_inner_diameter / 2 ) ] ) {
-									diagonal = sqrt( x ^ 2 + y ^ 2 );
+					technic_gear_secondary_pins_positive(
+						teeth = teeth, secondary_feature = secondary_feature,
+						height = desired_pin_hole_thickness
+					);
+				}
 
-									if ( diagonal + ( technic_gear_pin_hole_outer_diameter / 2 ) <= ( gear_inner_diameter / 2 ) ) {
-										translate( [ x, y, 0 ] ) {
-											cylinder( d = technic_gear_pin_hole_outer_diameter, h = desired_pin_hole_thickness, center = true );
-										};
+				technic_gear_secondary_pins_negative(
+					teeth = teeth, secondary_feature = secondary_feature,
+					height = desired_pin_hole_thickness
+				);
+			}
 
-										translate( [ x, -y, 0 ] ) difference() {
-											cylinder( d = technic_gear_pin_hole_outer_diameter, h = desired_pin_hole_thickness, center = true );
-										};
-
-										translate( [ -x, y, 0 ] ) difference() {
-											cylinder( d = technic_gear_pin_hole_outer_diameter, h = desired_pin_hole_thickness, center = true );
-										};
-
-										translate( [ -x, -y, 0 ] ) difference() {
-											cylinder( d = technic_gear_pin_hole_outer_diameter, h = desired_pin_hole_thickness, center = true );
-										};
-									}
-								}
-							}
-						}
-					};
-				};
-
-				// The pin holes.
-				union() {
-					// As long as the gear is big enough to allow it in the center section, create a grid of pin holes spaced 2 * technic_gear_pin_hole_horizontal_offset_from_center from each other.
-
-					rotate( [ 0, 0, 45 ] ) {
-						for ( x = [ technic_gear_pin_hole_horizontal_offset_from_center : technic_gear_pin_hole_horizontal_offset_from_center * 2 : gear_inner_diameter / 2 ] ) {
-							for ( y = [ technic_gear_pin_hole_horizontal_offset_from_center : technic_gear_pin_hole_horizontal_offset_from_center * 2 : ( gear_inner_diameter / 2 ) ] ) {
-								diagonal = sqrt( x ^ 2 + y ^ 2 );
-
-								if ( diagonal + ( technic_gear_pin_hole_outer_diameter / 2 ) <= ( gear_inner_diameter / 2 ) ) {
-									translate( [ x, y, 0 ] ) {
-										cylinder( d = technic_hole_diameter, h = desired_pin_hole_thickness + EXTENSION_FOR_DIFFERENCE, center = true );
-									};
-
-									translate( [ x, -y, 0 ] ) difference() {
-										cylinder( d = technic_hole_diameter, h = desired_pin_hole_thickness + EXTENSION_FOR_DIFFERENCE, center = true );
-									};
-
-									translate( [ -x, y, 0 ] ) difference() {
-										cylinder( d = technic_hole_diameter, h = desired_pin_hole_thickness + EXTENSION_FOR_DIFFERENCE, center = true );
-									};
-
-									translate( [ -x, -y, 0 ] ) difference() {
-										cylinder( d = technic_hole_diameter, h = desired_pin_hole_thickness + EXTENSION_FOR_DIFFERENCE, center = true );
-									};
-								}
-							}
-						}
-					}
-				};
-			};
-
-			// The normal teeth and their minimum tooth-root overlap.
 			technic_gear_normal_tooth_solid(
 				teeth = teeth,
 				height = desired_gear_tooth_thickness,
 				bore_diameter = gear_inner_diameter + ( EXTENSION_FOR_DIFFERENCE / 2 )
 			);
 
-			// The supports around the axle holes.
-			difference() {
-				union() {
-					rotate( [ 0, 0, 45 ] ) {
-						// Legacy axle-center reinforcement remains inside the body difference.
-						if ( center == "axle" && teeth >= 14 ) {
-							rotate( [ 0, 0, 90 ] ) {
-								technic_gear_center_positive(
-									center = "axle",
-									axial_form = "double",
-									reinforcement_height = desired_gear_axle_reinforcement_thickness,
-									axle_reinforcement = true
-								);
-							}
-						}
+			technic_gear_place_axle_stations(
+				records = axle_records, height = desired_gear_axle_reinforcement_thickness,
+				operand = "positive"
+			);
+		}
 
-						let ( x = technic_gear_pin_hole_horizontal_offset_from_center ) {
-							for ( y = [ technic_gear_pin_hole_horizontal_offset_from_center : technic_gear_pin_hole_horizontal_offset_from_center * 2 : ( gear_inner_diameter / 2 ) ] ) {
-								if ( y != technic_gear_pin_hole_horizontal_offset_from_center ) {
-									diagonal = sqrt( x ^ 2 + y ^ 2 );
+		technic_gear_place_axle_stations(
+			records = axle_records, height = desired_gear_axle_reinforcement_thickness,
+			operand = "negative"
+		);
 
-									if ( diagonal + ( technic_gear_pin_hole_outer_diameter / 2 ) <= ( gear_inner_diameter / 2 ) ) {
-										translate( [ 0, y - technic_gear_pin_hole_horizontal_offset_from_center, 0 ] ) rotate( [ 0, 0, 90 ] ) {
-											cube( size = [ technic_gear_axle_reinforcement_width, technic_gear_axle_reinforcement_height, desired_gear_axle_reinforcement_thickness ], center = true );
-										}
-
-										if ( y != technic_gear_pin_hole_horizontal_offset_from_center ) { // Don't add the center hole twice.
-											translate( [ 0, -y + technic_gear_pin_hole_horizontal_offset_from_center, 0 ] ) rotate( [ 0, 0, 90 ] ) {
-												cube( size = [ technic_gear_axle_reinforcement_width, technic_gear_axle_reinforcement_height, desired_gear_axle_reinforcement_thickness ], center = true );
-											}
-										}
-									}
-								}
-							}
-						}
-
-						for ( x = [ technic_gear_pin_hole_horizontal_offset_from_center : technic_gear_pin_hole_horizontal_offset_from_center * 2 : gear_inner_diameter / 2 ] ) {
-							let ( y = technic_gear_pin_hole_horizontal_offset_from_center ) {
-								if ( x != technic_gear_pin_hole_horizontal_offset_from_center ) {
-									diagonal = sqrt( x ^ 2 + y ^ 2 );
-
-									if ( diagonal + ( technic_gear_pin_hole_outer_diameter / 2 ) <= ( gear_inner_diameter / 2 ) ) {
-										translate( [ x - technic_gear_pin_hole_horizontal_offset_from_center, 0, 0 ] ) {
-											cube( size = [ technic_gear_axle_reinforcement_width, technic_gear_axle_reinforcement_height, desired_gear_axle_reinforcement_thickness ], center = true );
-										}
-
-										translate( [ -x + technic_gear_pin_hole_horizontal_offset_from_center, 0, 0 ] ) {
-											cube( size = [ technic_gear_axle_reinforcement_width, technic_gear_axle_reinforcement_height, desired_gear_axle_reinforcement_thickness ], center = true );
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-
-				// The walls of the pin holes
-				union () {
-					rotate( [ 0, 0, 45 ] ) {
-						// The max() calls in these loops is to ensure the support around the axle hole is shaped as if the pin holes were there even if the gear is too small for the pin holes. Otherwise it looks like just a big cube.
-						// These cutouts are slightly smaller than the pin hole walls so that the reinforcement overlaps into the walls,
-						// rather than exactly abutting them, which would leave non-manifold edges.
-						for ( x = [ technic_gear_pin_hole_horizontal_offset_from_center : technic_gear_pin_hole_horizontal_offset_from_center * 2 : max( technic_gear_pin_hole_horizontal_offset_from_center, gear_inner_diameter / 2 ) ] ) {
-							for ( y = [ technic_gear_pin_hole_horizontal_offset_from_center : technic_gear_pin_hole_horizontal_offset_from_center * 2 : max( technic_gear_pin_hole_horizontal_offset_from_center, ( gear_inner_diameter / 2 ) ) ] ) {
-								translate( [ x, y, 0 ] ) {
-									cylinder( d = technic_gear_pin_hole_outer_diameter - ( EXTENSION_FOR_DIFFERENCE / 4 ), h = desired_gear_axle_reinforcement_thickness + EXTENSION_FOR_DIFFERENCE, center = true );
-								};
-
-								translate( [ x, -y, 0 ] ) difference() {
-									cylinder( d = technic_gear_pin_hole_outer_diameter - ( EXTENSION_FOR_DIFFERENCE / 4 ), h = desired_gear_axle_reinforcement_thickness + EXTENSION_FOR_DIFFERENCE, center = true );
-								};
-
-								translate( [ -x, y, 0 ] ) difference() {
-									cylinder( d = technic_gear_pin_hole_outer_diameter - ( EXTENSION_FOR_DIFFERENCE / 4 ), h = desired_gear_axle_reinforcement_thickness + EXTENSION_FOR_DIFFERENCE, center = true );
-								};
-
-								translate( [ -x, -y, 0 ] ) difference() {
-									cylinder( d = technic_gear_pin_hole_outer_diameter - ( EXTENSION_FOR_DIFFERENCE / 4 ), h = desired_gear_axle_reinforcement_thickness + EXTENSION_FOR_DIFFERENCE, center = true );
-								};
-							}
-						}
-					}
-				};
-			};
-		};
-
-		// The axle holes.
-		rotate( [ 0, 0, 45 ] ) {
-			// Singular center negative connector geometry.
-			rotate( [ 0, 0, 90 ] ) {
-				technic_gear_center_negative(
-					center = center,
-					height = desired_gear_axle_reinforcement_thickness,
-					wide_axle = center == "axle" && teeth >= 14
-				);
-			}
-
-			// Run along the x axis and add the other holes.
-			// Rather than setting x,y to 0,0, we're using the same math here that we did to determine whether there would be pin holes
-			// past this point. This looks a little more complicated but lets us reuse the same logic, ensuring that the pin holes and
-			// axle holes always match. Maybe I'll come back and simplify this some day.
-			let ( x = technic_gear_pin_hole_horizontal_offset_from_center ) {
-				for ( y = [ technic_gear_pin_hole_horizontal_offset_from_center : technic_gear_pin_hole_horizontal_offset_from_center * 2 : ( gear_inner_diameter / 2 ) ] ) {
-					if ( y != technic_gear_pin_hole_horizontal_offset_from_center ) {
-						diagonal = sqrt( x ^ 2 + y ^ 2 );
-
-						if ( diagonal + ( technic_gear_pin_hole_outer_diameter / 2 ) <= ( gear_inner_diameter / 2 ) ) {
-							translate( [ 0, y - technic_gear_pin_hole_horizontal_offset_from_center, 0 ] ) rotate( [ 0, 0, 90 ] ) {
-								technic_gear_wide_axle_hole( height = desired_gear_axle_reinforcement_thickness );
-							}
-
-							if ( y != technic_gear_pin_hole_horizontal_offset_from_center ) { // Don't add the center hole twice.
-								translate( [ 0, -y + technic_gear_pin_hole_horizontal_offset_from_center, 0 ] ) rotate( [ 0, 0, 90 ] ) {
-									technic_gear_wide_axle_hole( height = desired_gear_axle_reinforcement_thickness );
-								}
-							}
-						}
-					}
-				}
-			}
-
-			// Run along the y axis and add the other holes.
-			for ( x = [ technic_gear_pin_hole_horizontal_offset_from_center : technic_gear_pin_hole_horizontal_offset_from_center * 2 : gear_inner_diameter / 2 ] ) {
-				let ( y = technic_gear_pin_hole_horizontal_offset_from_center ) {
-					if ( x != technic_gear_pin_hole_horizontal_offset_from_center ) {
-						diagonal = sqrt( x ^ 2 + y ^ 2 );
-
-						if ( diagonal + ( technic_gear_pin_hole_outer_diameter / 2 ) <= ( gear_inner_diameter / 2 ) ) {
-							translate( [ x - technic_gear_pin_hole_horizontal_offset_from_center, 0, 0 ] ) {
-								technic_gear_wide_axle_hole( height = desired_gear_axle_reinforcement_thickness );
-							}
-
-							translate( [ -x + technic_gear_pin_hole_horizontal_offset_from_center, 0, 0 ] ) {
-								technic_gear_wide_axle_hole( height = desired_gear_axle_reinforcement_thickness );
-							}
-						}
-					}
-				}
-			}
+		// Pin center remains on the accepted WP04 path and is not an axle record.
+		if ( center == "pin" ) {
+			technic_gear_center_negative(
+				center = "pin", height = desired_gear_axle_reinforcement_thickness
+			);
 		}
 	}
 
-	// Pin-center wall/shoulder geometry is added after body subtraction so its
-	// own hollow bore is not refilled by the surrounding body.
 	if ( center == "pin" ) {
 		technic_gear_center_positive(
-			center = "pin",
-			axial_form = "double",
+			center = "pin", axial_form = "double",
 			reinforcement_height = desired_gear_axle_reinforcement_thickness
 		);
 	}
