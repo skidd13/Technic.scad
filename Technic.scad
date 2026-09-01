@@ -1461,6 +1461,52 @@ function technic_gear_double_body_topology( teeth, body_mode ) =
 		&& technic_gear_axle_support_fits( teeth, [ 0, 0 ], 0 )
 		? "reduced" : "solid";
 
+/** WP13E experimental reduced RING pattern from official LDraw 4019.dat.
+ *
+ * This is deliberately a reduced-body pattern, not a hollow graph.  The
+ * existing reduced axial stack owns the thin web and tooth-support rim; four
+ * source-positioned circular openings/collars reshape that web.  The normal
+ * reduced center axle support and relief remain in the composition path and
+ * are carved by these openings, allowing the 4019 center lands to emerge from
+ * shared reduced infrastructure instead of a second bespoke hub.
+ */
+technic_gear_reduced_ring_reference_root_radius_ldu = 17;
+technic_gear_reduced_ring_reference_rim_inner_radius_ldu = 7 * 2.13;
+technic_gear_reduced_ring_cell_center_radius_ldu = 10;
+technic_gear_reduced_ring_cell_inner_radius_ldu = 2.83;
+technic_gear_reduced_ring_cell_outer_radius_ldu = 4.24;
+// 4019 open-side axle support from the official source coordinates.
+// The full-height center envelope has axis flats at 8 LDU and diagonal
+// transitions at 4 LDU, putting the four tall support lands in the diagonal
+// quadrants.  This is the same native axle phase as the classic reduced P1;
+// unlike I3, no cardinal-point diamond is introduced.
+technic_gear_reduced_ring_center_outer_axis_ldu = 8;
+technic_gear_reduced_ring_center_outer_chamfer_ldu = 4;
+// The open-side relief extends to 6 LDU on each axle axis.  Its width is
+// matched to the fitted axle spline so the opening continues the native axle
+// arms instead of creating a second rotated hole phase.
+technic_gear_reduced_ring_center_relief_axis_ldu = 6;
+// Official 4019 web faces sit at +/-2 LDU inside a +/-10 LDU center envelope.
+technic_gear_reduced_ring_reference_half_height_ldu = 10;
+technic_gear_reduced_ring_reference_web_half_height_ldu = 2;
+
+technic_gear_reduced_ring_tooth_support_ring_width =
+    ( technic_gear_reduced_ring_reference_root_radius_ldu
+      - technic_gear_reduced_ring_reference_rim_inner_radius_ldu ) * technic_ldraw_unit_in_mm;
+
+function technic_gear_reduced_ring_cell_center_radius() =
+    technic_gear_reduced_ring_cell_center_radius_ldu * technic_ldraw_unit_in_mm;
+function technic_gear_reduced_ring_cell_inner_radius() =
+    technic_gear_reduced_ring_cell_inner_radius_ldu * technic_ldraw_unit_in_mm;
+function technic_gear_reduced_ring_cell_outer_radius() =
+    technic_gear_reduced_ring_cell_outer_radius_ldu * technic_ldraw_unit_in_mm;
+function technic_gear_reduced_ring_rim_inner_diameter( teeth ) =
+    max( 0, technic_gear_root_diameter( teeth ) - ( 2 * technic_gear_reduced_ring_tooth_support_ring_width ) );
+function technic_gear_reduced_ring_web_height( gear_height ) =
+    gear_height
+    * ( 2 * technic_gear_reduced_ring_reference_web_half_height_ldu )
+    / ( 2 * technic_gear_reduced_ring_reference_half_height_ldu );
+
 /**
  * Source-derived hollow-body proportions from the official LDraw 32269 hub
  * geometry.  The quarter-body source uses radius 17 for the body boundary and
@@ -2346,6 +2392,97 @@ module technic_gear_webbed_ring_body( root_diameter, inner_diameter, web_height,
 	}
 }
 
+/** Positive collars around the four 4019 circular cutouts. */
+module technic_gear_reduced_ring_collars_positive( height ) {
+    center_radius = technic_gear_reduced_ring_cell_center_radius();
+    inner_radius = technic_gear_reduced_ring_cell_inner_radius();
+    outer_radius = technic_gear_reduced_ring_cell_outer_radius();
+
+    for ( point = [
+        [ center_radius, 0 ], [ -center_radius, 0 ],
+        [ 0, center_radius ], [ 0, -center_radius ]
+    ] ) {
+        translate( [ point[0], point[1], 0 ] ) {
+            difference() {
+                cylinder( r = outer_radius, h = height, center = true );
+                cylinder( r = inner_radius, h = height + EXTENSION_FOR_DIFFERENCE, center = true );
+            }
+        }
+    }
+}
+
+/** Four through-openings that carve both reduced web and shared center support. */
+module technic_gear_reduced_ring_openings_negative( height ) {
+    center_radius = technic_gear_reduced_ring_cell_center_radius();
+    inner_radius = technic_gear_reduced_ring_cell_inner_radius();
+
+    for ( point = [
+        [ center_radius, 0 ], [ -center_radius, 0 ],
+        [ 0, center_radius ], [ 0, -center_radius ]
+    ] ) {
+        translate( [ point[0], point[1], 0 ] )
+            cylinder( r = inner_radius, h = height + EXTENSION_FOR_DIFFERENCE, center = true );
+    }
+}
+
+/**
+ * Full-height 4019 open-side center support.
+ *
+ * The official face uses the axis-aligned octagonal envelope through
+ * (±8,±4)/(±4,±8) LDU.  Its four diagonal lands carry the axle while the
+ * open-side relief stays on the native 0°/90° axle phase.
+ */
+module technic_gear_reduced_ring_center_positive( height ) {
+    axis = technic_gear_reduced_ring_center_outer_axis_ldu * technic_ldraw_unit_in_mm;
+    chamfer = technic_gear_reduced_ring_center_outer_chamfer_ldu * technic_ldraw_unit_in_mm;
+    points = [
+        [ axis, chamfer ], [ chamfer, axis ], [ -chamfer, axis ], [ -axis, chamfer ],
+        [ -axis, -chamfer ], [ -chamfer, -axis ], [ chamfer, -axis ], [ axis, -chamfer ]
+    ];
+
+    linear_extrude( height = height, center = true ) polygon( points = points );
+}
+
+/**
+ * 4019 open-side axle relief.
+ *
+ * This is deliberately the same phase as the canonical reduced P1 entry
+ * relief, but present on both native axle axes.  The slot width is exactly the
+ * fitted axle-spline thickness: the relief therefore meets the axle arms
+ * without rotating or widening the axle hole itself.  Its source-derived
+ * 6-LDU half-length leaves the thin molded bridge before each round opening.
+ */
+module technic_gear_reduced_ring_open_axle_relief_negative( height ) {
+    relief_length = 2 * technic_gear_reduced_ring_center_relief_axis_ldu * technic_ldraw_unit_in_mm;
+    relief_width = technic_axle_spline_thickness * technic_axle_interference_fit_ratio;
+
+    for ( angle = [ 0, 90 ] ) {
+        rotate( [ 0, 0, angle ] )
+            linear_extrude( height = height + EXTENSION_FOR_DIFFERENCE, center = true )
+                technic_rounded_rectangle(
+                    width = relief_length,
+                    height = relief_width,
+                    radius = relief_width / 2
+                );
+    }
+}
+
+/** 4019 reduced pattern: classic thin web/rim plus four local full tooth-height collars. */
+module technic_gear_reduced_ring_body(
+    root_diameter, inner_diameter, web_height, ring_height, center_height
+) {
+    union() {
+        technic_gear_webbed_ring_body(
+            root_diameter = root_diameter, inner_diameter = inner_diameter,
+            web_height = web_height, ring_height = ring_height
+        );
+        technic_gear_reduced_ring_collars_positive( height = ring_height );
+        // 4019 owns only the positive center envelope; the fixed-phase axle
+        // cutter remains shared with every other center axle station.
+        technic_gear_reduced_ring_center_positive( height = center_height );
+    }
+}
+
 module _technic_gear_hollow_member_between( point_a, point_b, width, height ) {
 	hull() {
 		translate( [ point_a[0], point_a[1], 0 ] ) cylinder( d = width, h = height, center = true );
@@ -2451,16 +2588,24 @@ module technic_gear_hollow_ring_body(
 
 /** WP08 double-only body dispatcher. Inputs are resolved by technic_gear(). */
 module technic_gear_double_body_positive(
-	resolved_body_topology, hollow_structure, root_diameter, inner_diameter, hub_diameter,
+	resolved_body_topology, reduced_pattern, hollow_structure, root_diameter, inner_diameter, hub_diameter,
 	gear_height, reduced_body_height, tooth_height, member_width = 0, nodes = [], edges = []
 ) {
 	if ( resolved_body_topology == "solid" ) {
 		technic_gear_double_filled_body( root_diameter = root_diameter, height = gear_height );
 	} else if ( resolved_body_topology == "reduced" ) {
-		technic_gear_webbed_ring_body(
-			root_diameter = root_diameter, inner_diameter = inner_diameter,
-			web_height = reduced_body_height, ring_height = tooth_height
-		);
+		if ( reduced_pattern == "ring" ) {
+			technic_gear_reduced_ring_body(
+				root_diameter = root_diameter, inner_diameter = inner_diameter,
+				web_height = technic_gear_reduced_ring_web_height( gear_height ),
+				ring_height = tooth_height, center_height = gear_height
+			);
+		} else {
+			technic_gear_webbed_ring_body(
+				root_diameter = root_diameter, inner_diameter = inner_diameter,
+				web_height = reduced_body_height, ring_height = tooth_height
+			);
+		}
 	} else if ( resolved_body_topology == "hollow" && len( nodes ) > 0 ) {
 		if ( hollow_structure == "cross" ) {
 			technic_gear_hollow_cross_body( hub_diameter, inner_diameter, root_diameter, gear_height, member_width, nodes, edges );
@@ -2479,6 +2624,7 @@ module technic_gear(
 	tooth_sections = "normal",
 	bevel = "none",
 	body_mode = "reduced",
+	reduced_pattern = "classic",
 	hollow_structure = undef,
 	center = "axle",
 	secondary_feature = "pin+axle",
@@ -2490,6 +2636,7 @@ module technic_gear(
 	assert( _technic_gear_value_in( tooth_sections, [ "normal", "stepped" ] ), str( "invalid tooth_sections: ", tooth_sections ) );
 	assert( _technic_gear_value_in( bevel, [ "none", "single", "double" ] ), str( "invalid bevel: ", bevel ) );
 	assert( _technic_gear_value_in( body_mode, [ "filled", "reduced", "hollow" ] ), str( "invalid body_mode: ", body_mode ) );
+	assert( _technic_gear_value_in( reduced_pattern, [ "classic", "ring" ] ), str( "invalid reduced_pattern: ", reduced_pattern ) );
 	assert( is_undef( hollow_structure ) || _technic_gear_value_in( hollow_structure, [ "cross", "frame", "ring" ] ), str( "invalid hollow_structure: ", hollow_structure ) );
 	assert( _technic_gear_value_in( center, [ "axle", "pin" ] ), str( "invalid center: ", center ) );
 	assert( _technic_gear_value_in( secondary_feature, [ "none", "pin", "axle", "pin+axle", "clutch_single", "clutch_dual" ] ), str( "invalid secondary_feature: ", secondary_feature ) );
@@ -2526,7 +2673,9 @@ module technic_gear(
 		: "none";
 	body_root_diameter = axial_form == "double" ? technic_gear_double_rim_outer_diameter( teeth ) : 0;
 	body_inner_diameter = axial_form == "double"
-		? ( resolved_body_topology == "hollow" && hollow_structure == "cross"
+		? ( resolved_body_topology == "reduced" && reduced_pattern == "ring"
+			? technic_gear_reduced_ring_rim_inner_diameter( teeth )
+			: resolved_body_topology == "hollow" && hollow_structure == "cross"
 			? technic_gear_hollow_cross_rim_inner_diameter( teeth )
 			: resolved_body_topology == "hollow" && hollow_structure == "frame"
 			? technic_gear_hollow_frame_rim_inner_diameter( teeth )
@@ -2575,6 +2724,13 @@ module technic_gear(
 		body_mode_state == "supported" ? ( axial_form == "double" ? "wp08-double-body-dispatcher" : "body-dispatcher" ) :
 		body_mode_state == "missing" ? ( body_mode == "hollow" ? hollow_reason : "body-mode-not-implemented" ) :
 		"body-mode-not-implemented",
+		debug
+	);
+	_technic_gear_support_record(
+		"reduced_pattern", reduced_pattern,
+		body_mode == "reduced" ? reduced_pattern : "inactive",
+		body_mode == "reduced" ? "supported" : "derived",
+		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-reduced-ring-pattern" : "classic-reduced-pattern",
 		debug
 	);
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
@@ -2638,7 +2794,7 @@ module technic_gear(
 		if ( !( clutch_requested && !clutch_fits ) ) {
 			_technic_gear_double_sided_legacy(
 				teeth = teeth, gear_height = effective_height, center = effective_center,
-				body_mode = effective_body_mode, secondary_feature = effective_secondary_feature,
+				body_mode = effective_body_mode, reduced_pattern = reduced_pattern, secondary_feature = effective_secondary_feature,
 				resolved_body_topology = resolved_body_topology,
 				resolved_tooth_height = resolved_tooth_height,
 				tooth_sections = effective_tooth_sections, tooth_section_records = tooth_section_records,
@@ -3036,6 +3192,7 @@ module _technic_gear_double_sided_legacy(
 	gear_height = technic_gear_normal_height( "double" ),
 	center = "axle",
 	body_mode = "reduced",
+	reduced_pattern = "classic",
 	secondary_feature = "pin+axle",
 	resolved_body_topology = "reduced",
 	resolved_tooth_height = technic_gear_double_reduced_tooth_section_height( technic_gear_normal_height( "double" ) ),
@@ -3064,7 +3221,8 @@ module _technic_gear_double_sided_legacy(
 
 	// Resolve the combined station registry once. Both boolean operands consume
 	// this exact value so center and secondary geometry cannot drift.
-	axle_records = technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode, resolved_body_topology, hollow_structure );
+	station_body_topology = resolved_body_topology == "reduced" && reduced_pattern == "ring" ? "solid" : resolved_body_topology;
+	axle_records = technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode, station_body_topology, hollow_structure );
 
 	// Preserve the accepted WP05 nested body boolean ownership.
 	difference() {
@@ -3073,6 +3231,7 @@ module _technic_gear_double_sided_legacy(
 				union() {
 					technic_gear_double_body_positive(
 						resolved_body_topology = resolved_body_topology,
+						reduced_pattern = reduced_pattern,
 						hollow_structure = hollow_structure,
 						root_diameter = body_root_diameter,
 						inner_diameter = body_inner_diameter,
@@ -3132,6 +3291,14 @@ module _technic_gear_double_sided_legacy(
 			records = axle_records, height = desired_gear_axle_reinforcement_thickness,
 			operand = "negative"
 		);
+
+		// 4019 keeps the canonical reduced P1 center support/relief alignment.
+		// Its four cardinal circular openings reshape that shared support instead
+		// of replacing it with a bespoke center primitive.
+		if ( resolved_body_topology == "reduced" && reduced_pattern == "ring" ) {
+			technic_gear_reduced_ring_open_axle_relief_negative( height = gear_height );
+			technic_gear_reduced_ring_openings_negative( height = gear_height );
+		}
 
 		if ( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" ) {
 			clutch_depth = technic_gear_clutch_interface_depth( gear_height );
