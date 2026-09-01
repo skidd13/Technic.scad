@@ -2578,11 +2578,72 @@ module technic_gear_reduced_ring_collars_positive( height, inner_diameter ) {
     }
 }
 
+/** Weight-relief coffer opening for one recursive semicircle generation.
+ *
+ * The opening follows the same outward half-circle construction as the
+ * structural rib, but is inset by the source 4019 cell-wall thickness.  A
+ * half-wall bridge is retained along the anchor chord.  The cutter is applied
+ * only to the thin reduced web; full-height semicircle ribs remain untouched.
+ */
+module technic_gear_reduced_ring_coffer_generation_negative_2d(
+    anchor_radius, phase, width, clip_radius
+) {
+    arc_radius = anchor_radius / sqrt( 2 );
+    opening_radius = max( 0, arc_radius - width );
+    chord_bridge = width / 2;
+    opening_extent = opening_radius + width;
+
+    if ( opening_radius > 0 ) {
+        for ( quadrant = [ 0 : 3 ] ) {
+            mid_phase = phase + 45 + 90 * quadrant;
+            center = [
+                arc_radius * cos( mid_phase ),
+                arc_radius * sin( mid_phase )
+            ];
+
+            intersection() {
+                circle( r = clip_radius );
+
+                translate( center )
+                    rotate( mid_phase )
+                        intersection() {
+                            circle( r = opening_radius );
+
+                            // Keep a source-wall-derived bridge along the
+                            // anchor chord; only the outward lobe is relieved.
+                            translate( [ chord_bridge, -opening_extent ] )
+                                square( [ opening_extent * 2, opening_extent * 2 ] );
+                        }
+            }
+        }
+    }
+}
+
+/** Through-holes cut only into the thin reduced web between curved ribs. */
+module technic_gear_reduced_ring_coffer_openings_negative( height, inner_diameter ) {
+    generation_count = technic_gear_reduced_ring_interlock_generation_count( inner_diameter );
+    width = technic_gear_reduced_ring_interlock_width();
+    clip_radius = inner_diameter / 2;
+
+    if ( generation_count > 0 ) {
+        linear_extrude( height = height + EXTENSION_FOR_DIFFERENCE, center = true )
+            union() {
+                for ( generation = [ 0 : generation_count - 1 ] )
+                    technic_gear_reduced_ring_coffer_generation_negative_2d(
+                        anchor_radius = technic_gear_reduced_ring_interlock_anchor_radius( generation ),
+                        phase = technic_gear_reduced_ring_interlock_phase( generation ),
+                        width = width,
+                        clip_radius = clip_radius
+                    );
+            }
+    }
+}
+
 /** Through-openings remain the invariant four-circle 4019 core.
  *
- * The scalable semicircles are positive full-height ribs over the reduced web,
- * not additional through-cutouts.  This preserves a continuous thin shear web
- * beneath the interlocking curved load paths, analogous to a coffered shell.
+ * The scalable semicircles are positive full-height ribs.  Larger gears also
+ * receive source-wall-inset coffer openings in the thin reduced web between
+ * those ribs; the core four 4019 holes remain invariant.
  */
 module technic_gear_reduced_ring_openings_negative( height, inner_diameter ) {
     inner_radius = technic_gear_reduced_ring_cell_inner_radius();
@@ -2642,15 +2703,40 @@ module technic_gear_reduced_ring_open_axle_relief_negative( height ) {
     }
 }
 
-/** 4019 reduced pattern: classic thin web/rim plus four local full tooth-height collars. */
+/** 4019 reduced pattern: relieved thin web + full-height curved load ribs. */
 module technic_gear_reduced_ring_body(
     root_diameter, inner_diameter, web_height, ring_height, center_height
 ) {
+    generation_count = technic_gear_reduced_ring_interlock_generation_count( inner_diameter );
+
     union() {
-        technic_gear_webbed_ring_body(
-            root_diameter = root_diameter, inner_diameter = inner_diameter,
-            web_height = web_height, ring_height = ring_height
-        );
+        if ( generation_count == 0 ) {
+            // Freeze the accepted 16T body exactly.
+            technic_gear_webbed_ring_body(
+                root_diameter = root_diameter, inner_diameter = inner_diameter,
+                web_height = web_height, ring_height = ring_height
+            );
+        } else {
+            // Thin reduced web with coffer openings.  The tooth-support rim is
+            // constructed separately so the weight-relief cutters cannot
+            // weaken it.
+            difference() {
+                cylinder( d = inner_diameter, h = web_height, center = true );
+                technic_gear_reduced_ring_coffer_openings_negative(
+                    height = web_height, inner_diameter = inner_diameter
+                );
+            }
+
+            difference() {
+                cylinder( d = root_diameter, h = ring_height, center = true );
+                cylinder(
+                    d = inner_diameter,
+                    h = ring_height + EXTENSION_FOR_DIFFERENCE,
+                    center = true
+                );
+            }
+        }
+
         technic_gear_reduced_ring_collars_positive( height = ring_height, inner_diameter = inner_diameter );
         // 4019 owns only the positive center envelope; the fixed-phase axle
         // cutter remains shared with every other center axle station.
