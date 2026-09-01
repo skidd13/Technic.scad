@@ -1527,6 +1527,7 @@ technic_gear_hollow_frame_reference_rim_inner_radius_units = 29.5;
 technic_gear_hollow_frame_tooth_support_ring_width =
 	( technic_gear_hollow_frame_reference_root_radius_units - technic_gear_hollow_frame_reference_rim_inner_radius_units ) * 0.4;
 technic_gear_hollow_frame_first_station_radius = technic_gear_secondary_lattice_pitch;
+technic_gear_hollow_frame_reference_teeth = 36;
 
 /** FRAME owns a fixed-width tooth-support rim independently from CROSS/RING. */
 function technic_gear_hollow_frame_rim_inner_diameter( teeth ) =
@@ -1537,46 +1538,71 @@ function technic_gear_hollow_frame_secondary_max_radius( teeth ) =
 	technic_gear_hollow_frame_rim_inner_diameter( teeth ) / 2
 	- ( technic_gear_pin_hole_outer_diameter / 2 );
 
+/**
+ * Preserve the accepted 36T visual clearance between the outer FRAME joint and
+ * the tooth-support rim. The value is derived from the reference envelope; it
+ * is not repeated as an anonymous dimensional literal.
+ */
+technic_gear_hollow_frame_reference_outer_joint_clearance =
+	technic_gear_hollow_frame_secondary_max_radius( technic_gear_hollow_frame_reference_teeth )
+	- technic_gear_hollow_frame_first_station_radius;
+
+/** Target radius for the outermost FRAME joint centres. */
+function technic_gear_hollow_frame_outer_joint_target_radius( teeth ) =
+	max(
+		0,
+		technic_gear_hollow_frame_secondary_max_radius( teeth )
+		- technic_gear_hollow_frame_reference_outer_joint_clearance
+	);
+
 /** Effective radial radius of a diamond or axis-aligned square frame layer. */
 function _technic_gear_hollow_frame_layer_radius( shape, coordinate ) =
 	shape == "diamond" ? coordinate :
 	shape == "square" ? sqrt( 2 ) * coordinate :
 	assert( false, str( "invalid FRAME layer shape: ", shape ) );
 
-/**
- * Grow complete FRAME generations on the Technic lattice.
- *
- * At one coordinate `a`, the diamond D(a) is followed by square S(a). The
- * square's side centres are exactly the D(a) vertices. The next generation is
- * D(2a), whose side centres are exactly the S(a) vertices. Therefore the
- * recursive relation is D(a) -> S(a) -> D(2a) -> S(2a), with no transition
- * members required between layers.
- *
- * D8 is the minimum 32498 anchor. S8 is admitted when it fits. Every later
- * coordinate is admitted only as a complete D(a)+S(a) generation, preventing
- * a final orphan diamond and keeping the visual grammar regular.
- */
-function _technic_gear_hollow_frame_complete_generations( coordinate, maximum_radius ) =
-	let( square_radius = _technic_gear_hollow_frame_layer_radius( "square", coordinate ) )
-	square_radius <= maximum_radius
-		? concat(
-			[ [ "diamond", coordinate, coordinate ], [ "square", coordinate, square_radius ] ],
-			_technic_gear_hollow_frame_complete_generations( coordinate * 2, maximum_radius )
-		)
-		: [];
+/** Count complete D(a)+S(a) generations that fit from the 8 mm reference seed. */
+function _technic_gear_hollow_frame_generation_count( coordinate, target_radius ) =
+	_technic_gear_hollow_frame_layer_radius( "square", coordinate ) <= target_radius
+		? 1 + _technic_gear_hollow_frame_generation_count( coordinate * 2, target_radius )
+		: 0;
 
+/** Build `count` alternating D(a), S(a) generations. */
+function _technic_gear_hollow_frame_scaled_generations( coordinate, count ) =
+	count <= 0 ? [] : concat(
+		[
+			[ "diamond", coordinate, coordinate ],
+			[ "square", coordinate, _technic_gear_hollow_frame_layer_radius( "square", coordinate ) ]
+		],
+		_technic_gear_hollow_frame_scaled_generations( coordinate * 2, count - 1 )
+	);
+
+/**
+ * Resolve FRAME layers from the tooth-support rim inward.
+ *
+ * The 36T anchor remains D8 because its derived target radius is exactly the
+ * accepted first-station radius. Once a complete diamond+square generation can
+ * fit, the number of generations is selected using the 8 mm reference grammar,
+ * then the whole alternating sequence is uniformly scaled so the outermost
+ * square reaches the same derived clearance from the tooth-support rim as 36T.
+ *
+ * Successive geometry remains D(a) -> S(a) -> D(2a) -> S(2a). Therefore each
+ * inner-frame vertex lies exactly at the centre of a side of the next frame;
+ * no transition diagonals are required or emitted.
+ */
 function technic_gear_hollow_frame_layers( teeth ) =
 	let(
-		maximum_radius = technic_gear_hollow_frame_secondary_max_radius( teeth ),
+		target_radius = technic_gear_hollow_frame_outer_joint_target_radius( teeth ),
 		first = technic_gear_hollow_frame_first_station_radius,
-		first_square_radius = _technic_gear_hollow_frame_layer_radius( "square", first )
+		generation_count = _technic_gear_hollow_frame_generation_count( first, target_radius ),
+		outer_coordinate_multiplier = generation_count > 0 ? pow( 2, generation_count - 1 ) : 1,
+		base_coordinate = generation_count > 0
+			? target_radius / ( sqrt( 2 ) * outer_coordinate_multiplier )
+			: target_radius
 	)
-	maximum_radius < first ? [] :
-	maximum_radius < first_square_radius ? [ [ "diamond", first, first ] ] :
-	concat(
-		[ [ "diamond", first, first ], [ "square", first, first_square_radius ] ],
-		_technic_gear_hollow_frame_complete_generations( first * 2, maximum_radius )
-	);
+	target_radius < first ? [] :
+	generation_count == 0 ? [ [ "diamond", base_coordinate, base_coordinate ] ] :
+	_technic_gear_hollow_frame_scaled_generations( base_coordinate, generation_count );
 
 function _technic_gear_hollow_frame_layer_points( layer ) =
 	let( shape = layer[0], c = layer[1] )
