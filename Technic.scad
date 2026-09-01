@@ -3705,41 +3705,33 @@ module _technic_gear_double_sided_legacy(
 
 
 	// WP13F: finish all inner/body Boolean work before the outer ring and teeth.
+	// WP13G: secondary pin positives and bores now participate directly in
+	// the principal inner Boolean instead of a private nested difference().
 	union() {
 		difference() {
 			union() {
-				difference() {
-					union() {
-						technic_gear_double_body_positive(
-							resolved_body_topology = resolved_body_topology,
-							reduced_pattern = reduced_pattern,
-							hollow_structure = hollow_structure,
-							root_diameter = body_root_diameter,
-							inner_diameter = body_inner_diameter,
-							hub_diameter = body_hub_diameter,
-							gear_height = gear_height,
-							reduced_body_height = technic_gear_double_reduced_body_height( gear_height ),
-							tooth_height = resolved_tooth_height,
-							member_width = hollow_member_width,
-							nodes = hollow_nodes,
-							edges = hollow_edges
-						);
+				technic_gear_double_body_positive(
+					resolved_body_topology = resolved_body_topology,
+					reduced_pattern = reduced_pattern,
+					hollow_structure = hollow_structure,
+					root_diameter = body_root_diameter,
+					inner_diameter = body_inner_diameter,
+					hub_diameter = body_hub_diameter,
+					gear_height = gear_height,
+					reduced_body_height = technic_gear_double_reduced_body_height( gear_height ),
+					tooth_height = resolved_tooth_height,
+					member_width = hollow_member_width,
+					nodes = hollow_nodes,
+					edges = hollow_edges
+				);
 
-						// Solid bodies already contain the local pin wall; hollow bodies build
-						// derived node pads for selected stations.  Only the thin reduced web
-						// still needs the legacy positive pin-wall operand.
-						if ( resolved_body_topology == "reduced" ) {
-							technic_gear_secondary_pins_positive(
-								teeth = teeth, secondary_feature = secondary_feature,
-								height = desired_pin_wall_thickness
-							);
-						}
-					}
-
-					technic_gear_secondary_pins_negative(
+				// Solid bodies already contain the local pin wall; hollow bodies build
+				// derived node pads for selected stations.  Only the thin reduced web
+				// still needs the legacy positive pin-wall operand.
+				if ( resolved_body_topology == "reduced" ) {
+					technic_gear_secondary_pins_positive(
 						teeth = teeth, secondary_feature = secondary_feature,
-						height = desired_pin_cutout_height,
-						body_mode = body_mode, hollow_structure = hollow_structure
+						height = desired_pin_wall_thickness
 					);
 				}
 
@@ -3748,6 +3740,12 @@ module _technic_gear_double_sided_legacy(
 					operand = "positive"
 				);
 			}
+
+			technic_gear_secondary_pins_negative(
+				teeth = teeth, secondary_feature = secondary_feature,
+				height = desired_pin_cutout_height,
+				body_mode = body_mode, hollow_structure = hollow_structure
+			);
 
 			technic_gear_place_axle_stations(
 				records = axle_records, height = desired_gear_axle_reinforcement_thickness,
