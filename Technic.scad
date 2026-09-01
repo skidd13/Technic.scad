@@ -820,13 +820,71 @@ module technic_elbow(
 }
 
 /**
+ * Return the canonical module-1 pitch diameter for a Technic gear.
+ */
+function technic_gear_pitch_diameter( teeth ) = teeth;
+
+/**
+ * Return the canonical module-1 tip diameter for a Technic gear.
+ */
+function technic_gear_tip_diameter( teeth ) = teeth + 2;
+
+/**
+ * Return the canonical module-1 root diameter for the pinned involute source.
+ */
+function technic_gear_root_diameter( teeth ) = teeth - 2 * ( 1 + 1 / 6 );
+
+/**
+ * Return the classic measured reduced-rim inner diameter relationship.
+ * This is not a universal bore, hub, or body diameter.
+ */
+function technic_gear_classic_rim_inner_diameter( teeth ) =
+	technic_gear_root_diameter( teeth )
+	- ( technic_gear_24_tooth_bottom_diameter - technic_gear_24_tooth_inner_diameter );
+
+/**
  * Return the normal overall height for the selected gear axial construction.
  * `gear_height = undef` is resolved through this function by technic_gear().
  */
 function technic_gear_normal_height( axial_form ) =
-	axial_form == "double" ? technic_gear_axle_reinforcement_thickness :
-	axial_form == "single" ? ( technic_gear_12_tooth_lip_thickness + technic_gear_12_tooth_base_thickness + technic_gear_12_tooth_tooth_thickness ) :
+	axial_form == "double" ? 7.73 :
+	axial_form == "single" ? 3.6 :
 	assert( false, str( "invalid axial_form: ", axial_form ) );
+
+/** Double-axial secondary connector-wall height derived from gear_height. */
+function technic_gear_double_secondary_wall_height( gear_height ) = gear_height - 1.63;
+
+/** Double-axial normal tooth-section height derived from gear_height. */
+function technic_gear_double_normal_tooth_section_height( gear_height ) = gear_height - 4.03;
+
+/** Double-axial reduced continuous-body height derived from gear_height. */
+function technic_gear_double_reduced_body_height( gear_height ) = gear_height - 6.43;
+
+/** Single-axial lip height derived proportionally from gear_height. */
+function technic_gear_single_lip_height( gear_height ) = gear_height * ( 0.8 / 3.6 );
+
+/** Single-axial base height derived proportionally from gear_height. */
+function technic_gear_single_base_height( gear_height ) = gear_height * ( 0.4 / 3.6 );
+
+/** Single-axial tooth/hub height derived proportionally from gear_height. */
+function technic_gear_single_tooth_hub_height( gear_height ) = gear_height * ( 2.4 / 3.6 );
+
+/**
+ * Return whether all owned axial dimensions are positive before geometry work.
+ */
+function technic_gear_axial_dimensions_valid( axial_form, gear_height ) =
+	is_num( gear_height ) && gear_height > 0
+	&& (
+		axial_form == "double"
+			? technic_gear_double_secondary_wall_height( gear_height ) > 0
+				&& technic_gear_double_normal_tooth_section_height( gear_height ) > 0
+				&& technic_gear_double_reduced_body_height( gear_height ) > 0
+			: axial_form == "single"
+				? technic_gear_single_lip_height( gear_height ) > 0
+					&& technic_gear_single_base_height( gear_height ) > 0
+					&& technic_gear_single_tooth_hub_height( gear_height ) > 0
+				: false
+	);
 
 function _technic_gear_value_in( value, values ) = len( [ for ( candidate = values ) if ( value == candidate ) candidate ] ) > 0;
 
