@@ -1688,38 +1688,58 @@ function technic_gear_reduced_ring_cellular_hole_radius( shell_index, outer_radi
         ? technic_gear_reduced_ring_cell_inner_radius()
         : technic_gear_reduced_ring_cell_outer_radius();
 
-/** CELLULAR-I9 hard tooth-rim reservation.
+/** CELLULAR-I10 source-faithful reduced web + clean cellular reliefs.
  *
- * The cellular lattice owns only the interior of the tooth-support ring.
- * Its positive collars are clipped exactly at the ring inner boundary before
- * they are unioned with the separately generated rim.  Cell holes therefore
- * cannot cut or thin the tooth-support annulus, while the outer collars still
- * meet that boundary continuously for load transfer.
+ * Positive cellular support and negative weight relief are deliberately
+ * separated.  The collar lattice is clipped to the reserved tooth-rim inner
+ * boundary.  Relief holes are emitted only when the whole circular hole plus
+ * one source 4019 wall thickness fits inside that boundary.  This removes
+ * both accidental inter-cell sliver holes and clipped/partial rim holes.
  */
+function technic_gear_reduced_ring_cellular_hole_fits_rim(
+    inner_diameter, shell_radius, hole_radius
+) =
+    shell_radius
+    + hole_radius
+    + technic_gear_reduced_ring_cell_wall_thickness()
+    <= inner_diameter / 2 + 0.0001;
+
 module technic_gear_reduced_ring_cellular_field_2d( inner_diameter ) {
     shell_count = technic_gear_reduced_ring_cellular_shell_count( inner_diameter );
 
     intersection() {
-        difference() {
-            union() {
-                for ( shell_index = [ 0 : shell_count - 1 ] ) {
-                    r = technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index );
-                    n = technic_gear_reduced_ring_cellular_cell_count_for_radius( r, shell_index );
-                    phase = technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, shell_index );
-                    ro = technic_gear_reduced_ring_cellular_outer_radius( r, n, shell_index );
-                    for ( index = [ 0 : n - 1 ] ) {
-                        a = phase + 360 * index / n;
-                        translate( [ r * cos( a ), r * sin( a ) ] ) circle( r = ro );
-                    }
+        union() {
+            for ( shell_index = [ 0 : shell_count - 1 ] ) {
+                r = technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index );
+                n = technic_gear_reduced_ring_cellular_cell_count_for_radius( r, shell_index );
+                phase = technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, shell_index );
+                ro = technic_gear_reduced_ring_cellular_outer_radius( r, n, shell_index );
+                for ( index = [ 0 : n - 1 ] ) {
+                    a = phase + 360 * index / n;
+                    translate( [ r * cos( a ), r * sin( a ) ] ) circle( r = ro );
                 }
             }
-            union() {
-                for ( shell_index = [ 0 : shell_count - 1 ] ) {
-                    r = technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index );
-                    n = technic_gear_reduced_ring_cellular_cell_count_for_radius( r, shell_index );
-                    phase = technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, shell_index );
-                    ro = technic_gear_reduced_ring_cellular_outer_radius( r, n, shell_index );
-                    ri = technic_gear_reduced_ring_cellular_hole_radius( shell_index, ro );
+        }
+        circle( r = inner_diameter / 2 );
+    }
+}
+
+module technic_gear_reduced_ring_cellular_openings_field_2d( inner_diameter ) {
+    shell_count = technic_gear_reduced_ring_cellular_shell_count( inner_diameter );
+
+    intersection() {
+        circle( r = inner_diameter / 2 );
+        union() {
+            for ( shell_index = [ 0 : shell_count - 1 ] ) {
+                r = technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index );
+                n = technic_gear_reduced_ring_cellular_cell_count_for_radius( r, shell_index );
+                phase = technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, shell_index );
+                ro = technic_gear_reduced_ring_cellular_outer_radius( r, n, shell_index );
+                ri = technic_gear_reduced_ring_cellular_hole_radius( shell_index, ro );
+
+                if ( technic_gear_reduced_ring_cellular_hole_fits_rim(
+                    inner_diameter, r, ri
+                ) ) {
                     for ( index = [ 0 : n - 1 ] ) {
                         a = phase + 360 * index / n;
                         translate( [ r * cos( a ), r * sin( a ) ] ) circle( r = ri );
@@ -1727,9 +1747,17 @@ module technic_gear_reduced_ring_cellular_field_2d( inner_diameter ) {
                 }
             }
         }
-        // Hard ownership boundary: no CELLULAR material may enter the reserved rim.
-        circle( r = inner_diameter / 2 );
     }
+}
+
+module technic_gear_reduced_ring_cellular_openings_negative( height, inner_diameter ) {
+    // Extrude the complete selected relief field once.  This is geometrically
+    // identical to hundreds of individual cylinders but keeps OpenSCAD's CSG
+    // normalization bounded at 80T/128T.
+    linear_extrude( height = height + EXTENSION_FOR_DIFFERENCE, center = true )
+        technic_gear_reduced_ring_cellular_openings_field_2d(
+            inner_diameter = inner_diameter
+        );
 }
 
 module technic_gear_reduced_ring_cellular_lattice_positive( height, inner_diameter ) {
@@ -2880,8 +2908,13 @@ module technic_gear_reduced_ring_body(
             );
             technic_gear_reduced_ring_collars_positive( height = ring_height, inner_diameter = inner_diameter );
         } else {
-            // Full-height overlapping circular collars are the load-bearing body.
-            // No radial spokes or crosshair web is introduced.
+            // Source-faithful scaling: retain a thin REDUCED web beneath the
+            // full-height overlapping circular collars.  The web fills only
+            // accidental interstitial slivers; the explicit circular cutters
+            // remain the sole through-relief pattern.  The reserved tooth rim
+            // is still generated independently at full ring height.
+            cylinder( d = inner_diameter, h = web_height, center = true );
+
             difference() {
                 cylinder( d = root_diameter, h = ring_height, center = true );
                 cylinder( d = inner_diameter, h = ring_height + EXTENSION_FOR_DIFFERENCE, center = true );
@@ -3142,7 +3175,7 @@ module technic_gear(
 		"reduced_pattern", reduced_pattern,
 		body_mode == "reduced" ? reduced_pattern : "inactive",
 		body_mode == "reduced" ? "supported" : "derived",
-		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-circle-lattice-i9-rim-reserved" : "classic-reduced-pattern",
+		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-circle-lattice-i10-webbed-rim-reserved" : "classic-reduced-pattern",
 		debug
 	);
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
@@ -3713,11 +3746,13 @@ module _technic_gear_double_sided_legacy(
 				technic_gear_reduced_ring_open_axle_relief_negative( height = gear_height );
 				technic_gear_reduced_ring_openings_negative( height = gear_height, inner_diameter = body_inner_diameter );
 			} else {
-				// Large patterns use one combined cutter operand to keep CSG
-				// normalization bounded while preserving the same geometry.
+				// Large patterns cut one selected circular relief field through both
+				// the full-height collars and the thin reduced web.
 				union() {
 					technic_gear_reduced_ring_open_axle_relief_negative( height = gear_height );
-					technic_gear_reduced_ring_openings_negative( height = gear_height, inner_diameter = body_inner_diameter );
+					technic_gear_reduced_ring_cellular_openings_negative(
+						height = gear_height, inner_diameter = body_inner_diameter
+					);
 				}
 			}
 		}
