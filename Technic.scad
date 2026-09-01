@@ -907,6 +907,8 @@ technic_gear_double_bevel_center_half_height = 3 * 0.4;       // 1.20 mm
 technic_gear_double_bevel_reference_face_z   = 10 * 0.4;      // 4.00 mm
 technic_gear_double_bevel_arc_radius         = 8.125 * 0.4;   // 3.25 mm
 technic_gear_double_bevel_arc_segments       = 8;
+/** R4 crown sampling: 14 vs 16 divisions (~11% fewer involute vertices). */
+technic_gear_double_bevel_involute_steps      = 14;
 
 /** Fixed axial run of one radial crown continuation. */
 function technic_gear_double_bevel_arc_run() =
@@ -2016,7 +2018,7 @@ module technic_gear_normal_tooth_crown_profile_2d( teeth ) {
 	rho_ra = acos( rb / ra );
 	rho_r = acos( rb / r );
 	phi_r = grad( tan( rho_r ) - radian( rho_r ) );
-	step = rho_ra / 16;
+	step = rho_ra / technic_gear_double_bevel_involute_steps;
 	tau = 360 / teeth;
 	tooth_width = ( 180 * ( 1 - clearance ) ) / teeth + 2 * phi_r;
 	crown_overlap = EXTENSION_FOR_DIFFERENCE / 100;
