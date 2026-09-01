@@ -1473,6 +1473,54 @@ technic_gear_hollow_reference_opening_ratio =
 	technic_gear_hollow_reference_opening_radius_units
 	/ technic_gear_hollow_reference_body_radius_units;
 
+/** WP13C CROSS-only fixed geometry derived from LEGO/LDraw dimensions. */
+technic_gear_hollow_cross_tooth_support_ring_width =
+	( technic_gear_hollow_reference_body_radius_units - technic_gear_hollow_reference_opening_radius_units ) * 0.4;
+technic_gear_hollow_cross_member_width = technic_gear_secondary_lattice_pitch;
+
+/** CROSS owns its rim thickness independently from FRAME/RING. */
+function technic_gear_hollow_cross_rim_inner_diameter( teeth ) =
+	max( 0, technic_gear_root_diameter( teeth ) - ( 2 * technic_gear_hollow_cross_tooth_support_ring_width ) );
+
+/** Largest secondary center radius that remains fully inside the 1-brick cross. */
+function technic_gear_hollow_cross_secondary_max_radius( teeth ) =
+	technic_gear_hollow_cross_rim_inner_diameter( teeth ) / 2
+	- technic_gear_hollow_cross_member_width / 2;
+
+/** Fixed 8 mm station pitch along each CROSS arm. */
+function technic_gear_hollow_cross_secondary_radii( teeth ) =
+	let(
+		pitch = technic_gear_secondary_lattice_pitch,
+		maximum_radius = technic_gear_hollow_cross_secondary_max_radius( teeth ),
+		count = maximum_radius < pitch ? 0 : floor( maximum_radius / pitch )
+	)
+	count > 0 ? [ for ( i = [ 1 : count ] ) pitch * i ] : [];
+
+function technic_gear_hollow_cross_secondary_points( teeth ) =
+	[
+		for ( radius = technic_gear_hollow_cross_secondary_radii( teeth ) )
+			for ( point = [ [ radius, 0 ], [ -radius, 0 ], [ 0, radius ], [ 0, -radius ] ] )
+				point
+	];
+
+function technic_gear_hollow_cross_pin_points( teeth, requested ) =
+	requested == "pin" ? technic_gear_hollow_cross_secondary_points( teeth ) :
+	requested == "pin+axle" ? [ for ( p = technic_gear_hollow_cross_secondary_points( teeth ) ) if ( p[0] != 0 ) p ] : [];
+
+function technic_gear_hollow_cross_axle_points( teeth, requested ) =
+	requested == "axle" ? technic_gear_hollow_cross_secondary_points( teeth ) :
+	requested == "pin+axle" ? [ for ( p = technic_gear_hollow_cross_secondary_points( teeth ) ) if ( p[1] != 0 ) p ] : [];
+
+function technic_gear_hollow_cross_effective_secondary_feature( teeth, requested ) =
+	let(
+		has_pin = len( technic_gear_hollow_cross_pin_points( teeth, requested ) ) > 0,
+		has_axle = len( technic_gear_hollow_cross_axle_points( teeth, requested ) ) > 0
+	)
+	requested == "none" || requested == "clutch_single" || requested == "clutch_dual" ? "none" :
+	requested == "pin" ? ( has_pin ? "pin" : "none" ) :
+	requested == "axle" ? ( has_axle ? "axle" : "none" ) :
+	requested == "pin+axle" ? ( has_pin && has_axle ? "pin+axle" : has_pin ? "pin" : has_axle ? "axle" : "none" ) : "none";
+
 /** WP08 inner boundary of the tooth-support rim for each double topology. */
 function technic_gear_double_rim_inner_diameter( teeth, resolved_body_topology ) =
 	resolved_body_topology == "solid" ? 0 :
@@ -1514,7 +1562,9 @@ technic_gear_hollow_minimum_open_span = technic_pin_connector_shoulder_wall_thic
 function technic_gear_hollow_structure_valid( teeth, hollow_structure, center, secondary_feature ) =
 	let(
 		hub_diameter = technic_gear_double_hub_diameter( teeth, center, "hollow" ),
-		rim_inner_diameter = technic_gear_double_rim_inner_diameter( teeth, "hollow" ),
+		rim_inner_diameter = hollow_structure == "cross"
+			? technic_gear_hollow_cross_rim_inner_diameter( teeth )
+			: technic_gear_double_rim_inner_diameter( teeth, "hollow" ),
 		radial_open_span = ( rim_inner_diameter - hub_diameter ) / 2
 	)
 	_technic_gear_value_in( hollow_structure, [ "cross", "frame", "ring" ] )
@@ -1523,7 +1573,7 @@ function technic_gear_hollow_structure_valid( teeth, hollow_structure, center, s
 
 /** WP08 member width; topology fit is validated separately before geometry. */
 function technic_gear_hollow_member_width( teeth, hollow_structure, center, secondary_feature ) =
-	_technic_gear_hollow_base_member_width();
+	hollow_structure == "cross" ? technic_gear_hollow_cross_member_width : _technic_gear_hollow_base_member_width();
 
 /**
  * WP08 structure-node records. First two values are XY; third is node role.
@@ -1533,7 +1583,9 @@ function technic_gear_hollow_structure_nodes( teeth, hollow_structure, center, s
 	let(
 		effective_secondary = technic_gear_secondary_effective_feature( teeth, secondary_feature ),
 		hub_diameter = technic_gear_double_hub_diameter( teeth, center, "hollow" ),
-		rim_inner_diameter = technic_gear_double_rim_inner_diameter( teeth, "hollow" ),
+		rim_inner_diameter = hollow_structure == "cross"
+			? technic_gear_hollow_cross_rim_inner_diameter( teeth )
+			: technic_gear_double_rim_inner_diameter( teeth, "hollow" ),
 		member_width = technic_gear_hollow_member_width( teeth, hollow_structure, center, effective_secondary ),
 		hub_radius = hub_diameter / 2,
 		// Penetrate the rim by half an existing web thickness.  A merely tangent
@@ -1572,10 +1624,12 @@ function technic_gear_hollow_structure_nodes( teeth, hollow_structure, center, s
 			[ 0, rim_connection_radius, "structure" ],
 			[ 0, -rim_connection_radius, "structure" ]
 		] : [],
-		axle_points = effective_secondary == "axle" || effective_secondary == "pin+axle"
-			? technic_gear_secondary_axle_stations( teeth ) : [],
-		pin_points = effective_secondary == "pin" || effective_secondary == "pin+axle"
-			? technic_gear_secondary_pin_stations( teeth ) : [],
+		axle_points = hollow_structure == "cross" ? [] :
+			( effective_secondary == "axle" || effective_secondary == "pin+axle"
+				? technic_gear_secondary_axle_stations( teeth ) : [] ),
+		pin_points = hollow_structure == "cross" ? [] :
+			( effective_secondary == "pin" || effective_secondary == "pin+axle"
+				? technic_gear_secondary_pin_stations( teeth ) : [] ),
 		base_points = [ for ( node = base_nodes ) [ node[0], node[1] ] ],
 		// A selected secondary station may coincide with a structural node
 		// (the 8 mm frame corners are the canonical example).  Upgrade the
@@ -1690,6 +1744,12 @@ function technic_gear_secondary_effective_feature( teeth, requested ) =
 		  len( technic_gear_secondary_pin_stations( teeth ) ) > 0 ? "pin" : "none" ) :
 	"none";
 
+/** Thin subtype dispatcher; placement mathematics remains subtype-owned. */
+function technic_gear_secondary_effective_feature_resolved( teeth, requested, body_mode, hollow_structure ) =
+	body_mode == "hollow" && hollow_structure == "cross"
+		? technic_gear_hollow_cross_effective_secondary_feature( teeth, requested )
+		: technic_gear_secondary_effective_feature( teeth, requested );
+
 /** Build one axle station with all applicability resolved before placement. */
 function technic_gear_axle_station_record( teeth, point, orientation, body_mode, resolved_body_topology, role ) =
 	let(
@@ -1710,18 +1770,21 @@ function technic_gear_axle_station_record( teeth, point, orientation, body_mode,
 	];
 
 /** One composition-time registry for center plus selected secondary axle records. */
-function technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode, resolved_body_topology ) =
+function technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode, resolved_body_topology, hollow_structure = undef ) =
+	let(
+		secondary_axle_points = body_mode == "hollow" && hollow_structure == "cross"
+			? technic_gear_hollow_cross_axle_points( teeth, secondary_feature )
+			: ( secondary_feature == "axle" || secondary_feature == "pin+axle" ? technic_gear_secondary_axle_stations( teeth ) : [] )
+	)
 	concat(
 		center == "axle"
 			? [ technic_gear_axle_station_record( teeth, [ 0, 0 ], 0, body_mode, resolved_body_topology, "center" ) ]
 			: [],
-		secondary_feature == "axle" || secondary_feature == "pin+axle"
-			? [ for ( point = technic_gear_secondary_axle_stations( teeth ) )
-				technic_gear_axle_station_record(
-					teeth, point, technic_gear_secondary_axle_support_orientation( point ),
-					body_mode, resolved_body_topology, "secondary"
-				) ]
-			: []
+		[ for ( point = secondary_axle_points )
+			technic_gear_axle_station_record(
+				teeth, point, technic_gear_secondary_axle_support_orientation( point ),
+				body_mode, resolved_body_topology, "secondary"
+			) ]
 	);
 
 /**
@@ -1764,12 +1827,13 @@ module technic_gear_secondary_pins_positive( teeth, secondary_feature, height ) 
 }
 
 /** Dense selected pin bores. */
-module technic_gear_secondary_pins_negative( teeth, secondary_feature, height ) {
-	if ( secondary_feature == "pin" || secondary_feature == "pin+axle" ) {
-		for ( point = technic_gear_secondary_pin_stations( teeth ) ) {
-			translate( [ point[0], point[1], 0 ] ) {
-				cylinder( d = technic_hole_diameter, h = height + EXTENSION_FOR_DIFFERENCE, center = true );
-			}
+module technic_gear_secondary_pins_negative( teeth, secondary_feature, height, body_mode = "reduced", hollow_structure = undef ) {
+	points = body_mode == "hollow" && hollow_structure == "cross"
+		? technic_gear_hollow_cross_pin_points( teeth, secondary_feature )
+		: ( secondary_feature == "pin" || secondary_feature == "pin+axle" ? technic_gear_secondary_pin_stations( teeth ) : [] );
+	for ( point = points ) {
+		translate( [ point[0], point[1], 0 ] ) {
+			cylinder( d = technic_hole_diameter, h = height + EXTENSION_FOR_DIFFERENCE, center = true );
 		}
 	}
 }
@@ -2144,12 +2208,32 @@ module _technic_gear_hollow_hub_and_rim( hub_diameter, rim_inner_diameter, rim_o
 	}
 }
 
+/**
+ * CROSS-only orthogonal members.
+ *
+ * Do not reuse the generic hull/capsule graph member here: its circular end
+ * caps neck the arm into the rim and create an inward structural radius at the
+ * load-transfer point.  A plain LEGO-style cross carries its full one-brick
+ * width into the tooth-support rim.  The outer cylinder clips only the remote
+ * corners to the gear-root envelope; the arm-to-rim transition itself remains
+ * straight and full width.
+ */
+module _technic_gear_hollow_cross_members( rim_outer_diameter, member_width, height ) {
+	intersection() {
+		cylinder( d = rim_outer_diameter, h = height, center = true );
+		union() {
+			cube( [ rim_outer_diameter, member_width, height ], center = true );
+			cube( [ member_width, rim_outer_diameter, height ], center = true );
+		}
+	}
+}
+
 module technic_gear_hollow_cross_body(
 	hub_diameter, rim_inner_diameter, rim_outer_diameter, height, member_width, nodes, edges
 ) {
 	union() {
 		_technic_gear_hollow_hub_and_rim( hub_diameter, rim_inner_diameter, rim_outer_diameter, height );
-		_technic_gear_hollow_graph_members( nodes, edges, member_width, height );
+		_technic_gear_hollow_cross_members( rim_outer_diameter, member_width, height );
 		_technic_gear_hollow_node_pads( nodes, member_width, height );
 	}
 }
@@ -2256,10 +2340,14 @@ module technic_gear(
 	effective_secondary_feature = axial_form == "double"
 		? ( clutch_requested
 			? ( clutch_fits ? secondary_feature : "none" )
-			: technic_gear_secondary_effective_feature( teeth, secondary_feature ) )
+			: technic_gear_secondary_effective_feature_resolved( teeth, secondary_feature, body_mode, hollow_structure ) )
 		: "none";
 	body_root_diameter = axial_form == "double" ? technic_gear_double_rim_outer_diameter( teeth ) : 0;
-	body_inner_diameter = axial_form == "double" ? technic_gear_double_rim_inner_diameter( teeth, resolved_body_topology ) : 0;
+	body_inner_diameter = axial_form == "double"
+		? ( resolved_body_topology == "hollow" && hollow_structure == "cross"
+			? technic_gear_hollow_cross_rim_inner_diameter( teeth )
+			: technic_gear_double_rim_inner_diameter( teeth, resolved_body_topology ) )
+		: 0;
 	body_hub_diameter = axial_form == "double" ? technic_gear_double_hub_diameter( teeth, center, resolved_body_topology ) : 0;
 	hollow_valid = axial_form == "double" && body_mode == "hollow"
 		? technic_gear_hollow_structure_valid( teeth, hollow_structure, center, effective_secondary_feature )
@@ -2792,7 +2880,7 @@ module _technic_gear_double_sided_legacy(
 
 	// Resolve the combined station registry once. Both boolean operands consume
 	// this exact value so center and secondary geometry cannot drift.
-	axle_records = technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode, resolved_body_topology );
+	axle_records = technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode, resolved_body_topology, hollow_structure );
 
 	// Preserve the accepted WP05 nested body boolean ownership.
 	difference() {
@@ -2826,7 +2914,8 @@ module _technic_gear_double_sided_legacy(
 
 				technic_gear_secondary_pins_negative(
 					teeth = teeth, secondary_feature = secondary_feature,
-					height = desired_pin_cutout_height
+					height = desired_pin_cutout_height,
+					body_mode = body_mode, hollow_structure = hollow_structure
 				);
 			}
 
