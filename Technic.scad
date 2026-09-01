@@ -1630,10 +1630,21 @@ function technic_gear_hollow_frame_rim_projection( point, rim_connection_radius 
 	)
 	[ point[0] * scale, point[1] * scale ];
 
-/** Structural-only rim projections for all functional FRAME joints. */
-function technic_gear_hollow_frame_secondary_rim_points( teeth, secondary_feature, rim_connection_radius ) =
-	secondary_feature == "none" ? [] :
-	[ for ( point = technic_gear_hollow_frame_joint_points( teeth ) )
+/** First square layer, if FRAME has grown beyond the single-diamond seed. */
+function technic_gear_hollow_frame_first_square_layer( teeth ) =
+	let( squares = [ for ( layer = technic_gear_hollow_frame_layers( teeth ) ) if ( layer[0] == "square" ) layer ] )
+	len( squares ) > 0 ? squares[0] : undef;
+
+/**
+ * Structural 45-degree rim anchors begin with the first square, independent of
+ * secondary-feature selection. The first square's four corners define the four
+ * global diagonal rays; later square joints lie on the same rays and therefore
+ * need no additional rim anchor nodes.
+ */
+function technic_gear_hollow_frame_diagonal_rim_points( teeth, rim_connection_radius ) =
+	let( first_square = technic_gear_hollow_frame_first_square_layer( teeth ) )
+	is_undef( first_square ) ? [] :
+	[ for ( point = _technic_gear_hollow_frame_layer_points( first_square ) )
 		technic_gear_hollow_frame_rim_projection( point, rim_connection_radius ) ];
 
 /** Backward diagnostic name: cardinal radii of diamond layers only. */
@@ -1756,7 +1767,7 @@ function technic_gear_hollow_structure_nodes( teeth, hollow_structure, center, s
 		frame_axle_points = hollow_structure == "frame" ? technic_gear_hollow_frame_axle_points( teeth, effective_secondary ) : [],
 		frame_pin_points = hollow_structure == "frame" ? technic_gear_hollow_frame_pin_points( teeth, effective_secondary ) : [],
 		frame_rim_joint_points = hollow_structure == "frame"
-			? technic_gear_hollow_frame_secondary_rim_points( teeth, effective_secondary, rim_connection_radius ) : [],
+			? technic_gear_hollow_frame_diagonal_rim_points( teeth, rim_connection_radius ) : [],
 		frame_nodes = hollow_structure == "frame" ? concat(
 			[ [ 0, 0, "hub" ] ],
 			[ for ( point = frame_joint_points )
@@ -1826,12 +1837,10 @@ function _technic_gear_hollow_nearest_base_node_index( nodes, station_index, bas
 /**
  * WP08 graph edges.
  *
- * FRAME polygons retain no inter-layer connector edges. Instead, when any
- * secondary fixture is active, every functional FRAME joint is reinforced
- * radially to the tooth-support rim. Because all FRAME polygon joints are
- * functional for pin/axle modes, the appended rim-node block is exactly one
- * projection per polygon joint. Collinear projections naturally collapse into
- * the permanent CROSS (cardinal) or four shared 45-degree diagonals (square).
+ * FRAME polygons retain no inter-layer connector edges. Once the first square
+ * exists, its four corners define four permanent 45-degree structural rays to
+ * the tooth-support rim. This is FRAME geometry, not secondary-feature
+ * geometry, so it remains present for none, clutch and pin/axle modes alike.
  */
 function technic_gear_hollow_structure_edges( nodes, hollow_structure, teeth = undef ) =
 	let(
@@ -1839,14 +1848,21 @@ function technic_gear_hollow_structure_edges( nodes, hollow_structure, teeth = u
 		frame_layer_count = len( frame_layers ),
 		frame_joint_count = 4 * frame_layer_count,
 		frame_rim_count = hollow_structure == "frame" ? max( 0, len( nodes ) - 1 - frame_joint_count ) : 0,
+		first_square_layer_index = hollow_structure == "frame"
+			? let( matches = [ for ( i = [ 0 : frame_layer_count - 1 ] ) if ( frame_layers[i][0] == "square" ) i ] )
+				( len( matches ) > 0 ? matches[0] : -1 )
+			: -1,
 		frame_edges = hollow_structure == "frame" && frame_layer_count > 0 ?
 			concat(
 				[ for ( layer = [ 0 : frame_layer_count - 1 ] )
 					for ( edge = [ [ 0,1 ], [ 1,2 ], [ 2,3 ], [ 3,0 ] ] )
 						[ 1 + 4 * layer + edge[0], 1 + 4 * layer + edge[1] ] ],
-				frame_rim_count == frame_joint_count
-					? let( rim_start = 1 + frame_joint_count )
-						[ for ( i = [ 0 : frame_joint_count - 1 ] ) [ 1 + i, rim_start + i ] ]
+				frame_rim_count == 4 && first_square_layer_index >= 0
+					? let(
+						square_start = 1 + 4 * first_square_layer_index,
+						rim_start = 1 + frame_joint_count
+					  )
+						[ for ( i = [ 0 : 3 ] ) [ square_start + i, rim_start + i ] ]
 					: []
 			) : [],
 		base_count = hollow_structure == "cross" ? 5 : hollow_structure == "ring" ? 9 : 0,
