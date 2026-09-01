@@ -955,6 +955,88 @@ function technic_gear_center_radial_clearance_valid( center, axial_form, teeth )
 			? technic_gear_classic_rim_inner_diameter( teeth ) >= technic_pin_connector_outer_diameter
 			: true;
 
+/** Legacy single-form body diameter retained as a pure body helper. */
+function technic_gear_single_body_diameter( teeth ) =
+	( teeth / 12 ) * technic_gear_12_tooth_gear_diameter;
+
+/** Legacy single-form exposed tooth length retained for hub sizing. */
+function technic_gear_single_exposed_tooth_length() =
+	technic_gear_12_tooth_gear_diameter - technic_gear_12_tooth_hub_diameter;
+
+/** Legacy single-form hub diameter, derived without center/tooth ownership. */
+function technic_gear_single_hub_diameter( teeth ) =
+	max(
+		technic_gear_12_tooth_hub_diameter,
+		technic_gear_single_body_diameter( teeth ) - technic_gear_single_exposed_tooth_length()
+	);
+
+/**
+ * Positive continuous material for the supported filled body topology.
+ *
+ * This owns only the existing single-form lip/base/hub material. Teeth,
+ * center connectors, secondary features, placement, and local reinforcement
+ * remain outside the body layer.
+ */
+module technic_gear_filled_body_positive( teeth, gear_height ) {
+	lip_height = technic_gear_single_lip_height( gear_height );
+	base_height = technic_gear_single_base_height( gear_height );
+	tooth_hub_height = technic_gear_single_tooth_hub_height( gear_height );
+	gear_diameter = technic_gear_single_body_diameter( teeth );
+	hub_diameter = technic_gear_single_hub_diameter( teeth );
+
+	// Axial lip/washer material.
+	linear_extrude( lip_height ) {
+		difference() {
+			circle( d = technic_gear_12_tooth_lip_outer_diameter );
+			circle( d = technic_gear_12_tooth_lip_inner_diameter );
+		}
+	}
+
+	// Continuous base material.
+	translate( [ 0, 0, lip_height ] ) {
+		cylinder( d = gear_diameter, h = base_height );
+	}
+
+	// Continuous hub material. Connector selection remains outside.
+	translate( [ 0, 0, lip_height + base_height ] ) {
+		cylinder( d = hub_diameter, h = tooth_hub_height );
+	}
+}
+
+/**
+ * Positive continuous material for the supported reduced body topology.
+ * Reduced thickness is always derived from gear_height via the approved
+ * fixed 6.43 mm offset helper; there is no independent reduced-thickness knob.
+ */
+module technic_gear_reduced_body_positive( teeth, gear_height ) {
+	cylinder(
+		d = technic_gear_classic_rim_inner_diameter( teeth ),
+		h = technic_gear_double_reduced_body_height( gear_height ),
+		center = true
+	);
+}
+
+/**
+ * Dispatch positive continuous gear-body material only.
+ *
+ * `hollow` intentionally emits no hidden filled disk until WP08 supplies a
+ * real positive hollow structure. Unsupported cross-form filled/reduced
+ * requests are resolved by technic_gear() before this internal boundary.
+ */
+module technic_gear_body_positive( axial_form, body_mode, teeth, gear_height ) {
+	if ( body_mode == "filled" ) {
+		if ( axial_form == "single" ) {
+			technic_gear_filled_body_positive( teeth = teeth, gear_height = gear_height );
+		}
+	} else if ( body_mode == "reduced" ) {
+		if ( axial_form == "double" ) {
+			technic_gear_reduced_body_positive( teeth = teeth, gear_height = gear_height );
+		}
+	} else if ( body_mode == "hollow" ) {
+		// Missing until WP08. Deliberately no continuous fallback disk here.
+	}
+}
+
 module technic_gear(
 	axial_form = "double",
 	teeth = 24,
@@ -982,13 +1064,14 @@ module technic_gear(
 	effective_height = requested_height;
 	effective_tooth_sections = "normal";
 	effective_bevel = axial_form == "single" ? ( bevel == "double" ? "single" : bevel ) : "none";
-	effective_body_mode = axial_form == "double" ? "reduced" : "filled";
+	legacy_body_mode = axial_form == "double" ? "reduced" : "filled";
+	effective_body_mode = body_mode == "hollow" ? "hollow" : legacy_body_mode;
 	effective_center = center;
 	effective_secondary_feature = axial_form == "double" ? "pin+axle" : "none";
 	height_state = "supported";
 	tooth_sections_state = tooth_sections == "normal" ? "supported" : "fallback";
 	bevel_state = bevel == effective_bevel ? "supported" : "fallback";
-	body_mode_state = body_mode == effective_body_mode ? "supported" : "fallback";
+	body_mode_state = body_mode == "hollow" ? "missing" : ( body_mode == effective_body_mode ? "supported" : "fallback" );
 	center_state = "supported";
 	secondary_state = secondary_feature == effective_secondary_feature ? "supported" : "fallback";
 	hollow_effective = body_mode == "hollow" ? hollow_structure : "inactive";
@@ -1000,7 +1083,7 @@ module technic_gear(
 	_technic_gear_support_record( "gear_height", requested_height, effective_height, height_state, is_undef( gear_height ) ? "normal-default" : "configured-height", debug );
 	_technic_gear_support_record( "tooth_sections", tooth_sections, effective_tooth_sections, tooth_sections_state, tooth_sections_state == "supported" ? "legacy-normal" : "stepped-not-implemented", debug );
 	_technic_gear_support_record( "bevel", bevel, effective_bevel, bevel_state, bevel_state == "supported" ? "legacy-path" : "bevel-not-implemented", debug );
-	_technic_gear_support_record( "body_mode", body_mode, effective_body_mode, body_mode_state, body_mode_state == "supported" ? "legacy-path" : "body-mode-not-implemented", debug );
+	_technic_gear_support_record( "body_mode", body_mode, effective_body_mode, body_mode_state, body_mode_state == "supported" ? "body-dispatcher" : ( body_mode_state == "missing" ? "hollow-not-implemented" : "body-mode-not-implemented" ), debug );
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
 	_technic_gear_support_record( "center", center, effective_center, center_state, axial_form == "double" && center == "pin" ? "cross-interface-reuse" : "legacy-path", debug );
 	_technic_gear_support_record( "secondary_feature", secondary_feature, effective_secondary_feature, secondary_state, secondary_state == "supported" ? ( axial_form == "double" ? "legacy-fit-derived" : "legacy-none" ) : ( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" ? "clutch-not-implemented" : "secondary-feature-not-implemented" ), debug );
@@ -1009,9 +1092,9 @@ module technic_gear(
 	assert( technic_gear_center_radial_clearance_valid( effective_center, axial_form, teeth ), str( "center connector lacks radial clearance: center=", effective_center, ", axial_form=", axial_form, ", teeth=", teeth ) );
 
 	if ( axial_form == "double" ) {
-		_technic_gear_double_sided_legacy( teeth = teeth, gear_height = effective_height, center = effective_center );
+		_technic_gear_double_sided_legacy( teeth = teeth, gear_height = effective_height, center = effective_center, body_mode = effective_body_mode );
 	} else {
-		_technic_gear_single_sided_legacy( teeth = teeth, bevel = effective_bevel == "single", center_hole = effective_center, gear_height = effective_height );
+		_technic_gear_single_sided_legacy( teeth = teeth, bevel = effective_bevel == "single", center_hole = effective_center, gear_height = effective_height, body_mode = effective_body_mode );
 	}
 }
 
@@ -1105,7 +1188,8 @@ module technic_gear_single_bevel_cutter(
 module _technic_gear_double_sided_legacy(
 	teeth = 24,
 	gear_height = technic_gear_normal_height( "double" ),
-	center = "axle"
+	center = "axle",
+	body_mode = "reduced"
 ) {
 	include <lib/gears/gears.scad>;
 
@@ -1136,8 +1220,13 @@ module _technic_gear_double_sided_legacy(
 			// The central hub,
 			difference() {
 				union () {
-					// The hub of the gear.
-					cylinder( d = gear_inner_diameter, h = desired_gear_wheel_thickness, center = true );
+					// Positive continuous body material is owned by the WP05 body dispatcher.
+					technic_gear_body_positive(
+						axial_form = "double",
+						body_mode = body_mode,
+						teeth = teeth,
+						gear_height = gear_height
+					);
 
 					// The walls of the pin holes
 					union () {
@@ -1385,34 +1474,22 @@ module technic_gear_single_sided( teeth = 12, bevel = true, center_hole = "axle"
 	);
 }
 
-module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole = "axle", gear_height = technic_gear_normal_height( "single" ) ) {
+module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole = "axle", gear_height = technic_gear_normal_height( "single" ), body_mode = "filled" ) {
 	lip_height = technic_gear_single_lip_height( gear_height );
 	base_height = technic_gear_single_base_height( gear_height );
 	tooth_hub_height = technic_gear_single_tooth_hub_height( gear_height );
-	// Gears appear to be one inch wide for every 24 teeth they have.
-	gear_diameter = ( teeth / 12 ) * technic_gear_12_tooth_gear_diameter;
-
-	// The diameter of the hub grows with gear diameter enough to keep the length of the exposed teeth constant.
-	exposed_tooth_length = ( technic_gear_12_tooth_gear_diameter - technic_gear_12_tooth_hub_diameter );
-
-	// ...but the 12-tooth size is the minimum in order to support the axle or pin hole in the center.
-	hub_diameter = max( technic_gear_12_tooth_hub_diameter, gear_diameter - exposed_tooth_length );
+	gear_diameter = technic_gear_single_body_diameter( teeth );
+	hub_diameter = technic_gear_single_hub_diameter( teeth );
 
 	difference() {
 		union() {
-			// The lip that acts as a washer between the gear and a beam or brick.
-			linear_extrude( lip_height ) {
-				difference() {
-					circle( d = technic_gear_12_tooth_lip_outer_diameter );
-					circle( d = technic_gear_12_tooth_lip_inner_diameter );
-				}
-			}
-
-			// The base of the gear.
-			translate( [ 0, 0, lip_height ] ) cylinder( d = gear_diameter, h = base_height );
-
-			// The hub of the gear.
-			translate( [ 0, 0, lip_height + base_height ] ) cylinder( d = hub_diameter, h = tooth_hub_height );
+			// Positive continuous body material is owned by the WP05 body dispatcher.
+			technic_gear_body_positive(
+				axial_form = "single",
+				body_mode = body_mode,
+				teeth = teeth,
+				gear_height = gear_height
+			);
 
 			// The teeth. Use the shared module-1 involute solid; beveling is a
 			// separate exposed-face subtraction so the body-side profile remains full.
