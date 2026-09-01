@@ -900,6 +900,61 @@ module _technic_gear_support_record( feature, requested, effective, state, reaso
 	}
 }
 
+/**
+ * Positive material for the singular center connector.
+ *
+ * This module owns connector-local reinforcement only; the owning body remains
+ * outside. Pin wall/shoulder geometry reuses the existing connector primitive.
+ */
+module technic_gear_center_positive(
+	center,
+	axial_form,
+	reinforcement_height,
+	axle_reinforcement = false
+) {
+	if ( center == "axle" ) {
+		if ( axle_reinforcement ) {
+			cube(
+				size = [
+					technic_gear_axle_reinforcement_width,
+					technic_gear_axle_reinforcement_height,
+					reinforcement_height
+				],
+				center = true
+			);
+		}
+	} else if ( center == "pin" ) {
+		translate( [ 0, 0, -reinforcement_height / 2 ] ) {
+			technic_pin_connector( length = reinforcement_height / technic_height_in_mm );
+		}
+	}
+}
+
+/** Generate only the negative geometry for the singular center connector. */
+module technic_gear_center_negative( center, height, wide_axle = false, pin_clearance_diameter = technic_pin_connector_outer_diameter - ( EXTENSION_FOR_DIFFERENCE / 4 ) ) {
+	if ( center == "axle" ) {
+		if ( wide_axle ) {
+			technic_gear_wide_axle_hole( height = height, center_of_multiple = true );
+		} else {
+			technic_axle_hole( height = height );
+		}
+	} else if ( center == "pin" ) {
+		cylinder(
+			d = pin_clearance_diameter,
+			h = height + EXTENSION_FOR_DIFFERENCE,
+			center = true
+		);
+	}
+}
+
+/** Radial clearance for the singular center connector against the owning body. */
+function technic_gear_center_radial_clearance_valid( center, axial_form, teeth ) =
+	center == "axle"
+		? true
+		: axial_form == "double"
+			? technic_gear_classic_rim_inner_diameter( teeth ) >= technic_pin_connector_outer_diameter
+			: true;
+
 module technic_gear(
 	axial_form = "double",
 	teeth = 24,
@@ -928,13 +983,13 @@ module technic_gear(
 	effective_tooth_sections = "normal";
 	effective_bevel = axial_form == "single" ? ( bevel == "double" ? "single" : bevel ) : "none";
 	effective_body_mode = axial_form == "double" ? "reduced" : "filled";
-	effective_center = axial_form == "single" ? center : "axle";
+	effective_center = center;
 	effective_secondary_feature = axial_form == "double" ? "pin+axle" : "none";
 	height_state = "supported";
 	tooth_sections_state = tooth_sections == "normal" ? "supported" : "fallback";
 	bevel_state = bevel == effective_bevel ? "supported" : "fallback";
 	body_mode_state = body_mode == effective_body_mode ? "supported" : "fallback";
-	center_state = center == effective_center ? "supported" : "fallback";
+	center_state = "supported";
 	secondary_state = secondary_feature == effective_secondary_feature ? "supported" : "fallback";
 	hollow_effective = body_mode == "hollow" ? hollow_structure : "inactive";
 	hollow_state = body_mode == "hollow" ? "missing" : "derived";
@@ -947,13 +1002,14 @@ module technic_gear(
 	_technic_gear_support_record( "bevel", bevel, effective_bevel, bevel_state, bevel_state == "supported" ? "legacy-path" : "bevel-not-implemented", debug );
 	_technic_gear_support_record( "body_mode", body_mode, effective_body_mode, body_mode_state, body_mode_state == "supported" ? "legacy-path" : "body-mode-not-implemented", debug );
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
-	_technic_gear_support_record( "center", center, effective_center, center_state, center_state == "supported" ? "legacy-path" : "double-pin-center-not-implemented", debug );
+	_technic_gear_support_record( "center", center, effective_center, center_state, axial_form == "double" && center == "pin" ? "cross-interface-reuse" : "legacy-path", debug );
 	_technic_gear_support_record( "secondary_feature", secondary_feature, effective_secondary_feature, secondary_state, secondary_state == "supported" ? ( axial_form == "double" ? "legacy-fit-derived" : "legacy-none" ) : ( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" ? "clutch-not-implemented" : "secondary-feature-not-implemented" ), debug );
 
 	assert( technic_gear_axial_dimensions_valid( axial_form, effective_height ), str( "gear_height produces invalid axial dimensions: ", effective_height ) );
+	assert( technic_gear_center_radial_clearance_valid( effective_center, axial_form, teeth ), str( "center connector lacks radial clearance: center=", effective_center, ", axial_form=", axial_form, ", teeth=", teeth ) );
 
 	if ( axial_form == "double" ) {
-		_technic_gear_double_sided_legacy( teeth = teeth, gear_height = effective_height );
+		_technic_gear_double_sided_legacy( teeth = teeth, gear_height = effective_height, center = effective_center );
 	} else {
 		_technic_gear_single_sided_legacy( teeth = teeth, bevel = effective_bevel == "single", center_hole = effective_center, gear_height = effective_height );
 	}
@@ -1048,7 +1104,8 @@ module technic_gear_single_bevel_cutter(
 
 module _technic_gear_double_sided_legacy(
 	teeth = 24,
-	gear_height = technic_gear_normal_height( "double" )
+	gear_height = technic_gear_normal_height( "double" ),
+	center = "axle"
 ) {
 	include <lib/gears/gears.scad>;
 
@@ -1155,11 +1212,15 @@ module _technic_gear_double_sided_legacy(
 			difference() {
 				union() {
 					rotate( [ 0, 0, 45 ] ) {
-						// The center hole.
-						if ( teeth  >= 14 ) { // If the tooth count is 14 or below, the axle reinforcement will conflict with the teeth, so omit it.
-
+						// Legacy axle-center reinforcement remains inside the body difference.
+						if ( center == "axle" && teeth >= 14 ) {
 							rotate( [ 0, 0, 90 ] ) {
-								cube( size = [ technic_gear_axle_reinforcement_width, technic_gear_axle_reinforcement_height, desired_gear_axle_reinforcement_thickness ], center = true );
+								technic_gear_center_positive(
+									center = "axle",
+									axial_form = "double",
+									reinforcement_height = desired_gear_axle_reinforcement_thickness,
+									axle_reinforcement = true
+								);
 							}
 						}
 
@@ -1235,13 +1296,13 @@ module _technic_gear_double_sided_legacy(
 
 		// The axle holes.
 		rotate( [ 0, 0, 45 ] ) {
-			// The center hole.
+			// Singular center negative connector geometry.
 			rotate( [ 0, 0, 90 ] ) {
-				if ( teeth >= 14 ) {
-					technic_gear_wide_axle_hole( height = desired_gear_axle_reinforcement_thickness, center_of_multiple = true ); // @todo Theoretically, center_of_multiple should be false if there's only one axle hole in total.
-				} else {
-					technic_axle_hole( height = desired_gear_axle_reinforcement_thickness );
-				}
+				technic_gear_center_negative(
+					center = center,
+					height = desired_gear_axle_reinforcement_thickness,
+					wide_axle = center == "axle" && teeth >= 14
+				);
 			}
 
 			// Run along the x axis and add the other holes.
@@ -1287,6 +1348,16 @@ module _technic_gear_double_sided_legacy(
 				}
 			}
 		}
+	}
+
+	// Pin-center wall/shoulder geometry is added after body subtraction so its
+	// own hollow bore is not refilled by the surrounding body.
+	if ( center == "pin" ) {
+		technic_gear_center_positive(
+			center = "pin",
+			axial_form = "double",
+			reinforcement_height = desired_gear_axle_reinforcement_thickness
+		);
 	}
 }
 
@@ -1362,17 +1433,25 @@ module _technic_gear_single_sided_legacy( teeth = 12, bevel = true, center_hole 
 
 		if ( center_hole == "axle" ) {
 			// Remove the axle hole.
-			technic_axle_hole( height = 1 ); // @todo If we add a width/thickness option, it would replace 1 here.
+			technic_gear_center_negative( center = "axle", height = 1 );
 		} else if ( center_hole == "pin" ) {
-			translate( [ 0, 0, lip_height - ( EXTENSION_FOR_DIFFERENCE / 2 ) ] ) {
-				cylinder( d = min( technic_pin_connector_outer_diameter, technic_gear_12_tooth_lip_inner_diameter ), h = base_height + tooth_hub_height + EXTENSION_FOR_DIFFERENCE );
+			translate( [ 0, 0, lip_height + ( base_height + tooth_hub_height ) / 2 ] ) {
+				technic_gear_center_negative(
+					center = "pin",
+					height = base_height + tooth_hub_height,
+					pin_clearance_diameter = min( technic_pin_connector_outer_diameter, technic_gear_12_tooth_lip_inner_diameter )
+				);
 			}
 		}
 	}
 
 	if ( center_hole == "pin" ) {
-		translate( [ 0, 0, lip_height ] ) {
-			technic_pin_connector( length = 1 );
+		translate( [ 0, 0, lip_height + ( technic_height_in_mm / 2 ) ] ) {
+			technic_gear_center_positive(
+				center = "pin",
+				axial_form = "single",
+				reinforcement_height = technic_height_in_mm
+			);
 		}
 	}
 }
