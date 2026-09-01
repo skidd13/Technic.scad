@@ -1625,30 +1625,69 @@ function technic_gear_reduced_ring_interlock_positive_clip_radius( inner_diamete
  * on adjacent shells overlap radially.  The result is a continuous circle-based
  * load network rather than a crosshair or spoke graph.
  */
-function technic_gear_reduced_ring_cellular_shell_pitch() =
-    // I13 golf-ball-like close packing: neighboring circular RELIEF holes
-    // retain exactly one source 4019 wall between them.  Because the positive
-    // collars keep their source outer radius, this simultaneously makes
-    // neighboring collars overlap by exactly one source wall thickness.
-    // This is the densest source-derived packing that preserves a full wall.
-    ( 2 * technic_gear_reduced_ring_cell_inner_radius() )
+function technic_gear_reduced_ring_cellular_row_radius_increment() =
+    // I15: each newly added radial row grows the relief diameter by one
+    // sixteenth of the source 4019 wall thickness.  Radius therefore grows by
+    // one thirty-second wall per row: small enough to remain visually gentle,
+    // but independent of total gear size / shell count.
+    technic_gear_reduced_ring_cell_wall_thickness() / 32;
+function technic_gear_reduced_ring_cellular_hole_radius_for_shell( shell_index ) =
+    technic_gear_reduced_ring_cell_inner_radius()
+    + shell_index * technic_gear_reduced_ring_cellular_row_radius_increment();
+function technic_gear_reduced_ring_cellular_outer_radius_for_shell( shell_index ) =
+    // Preserve the source 4019 collar wall at every row even as the hole grows.
+    technic_gear_reduced_ring_cellular_hole_radius_for_shell( shell_index )
     + technic_gear_reduced_ring_cell_wall_thickness();
+function technic_gear_reduced_ring_cellular_pitch_for_shell( shell_index ) =
+    // A golf-ball-like invariant: adjacent holes retain exactly one source wall
+    // and adjacent full-height collars overlap by exactly one source wall.
+    ( 2 * technic_gear_reduced_ring_cellular_hole_radius_for_shell( shell_index ) )
+    + technic_gear_reduced_ring_cell_wall_thickness();
+function technic_gear_reduced_ring_cellular_shell_pitch() =
+    // Compatibility / diagnostics: the first scalable row uses the original
+    // I13 golf packing pitch.
+    technic_gear_reduced_ring_cellular_pitch_for_shell( 0 );
 function technic_gear_reduced_ring_cellular_overlap() =
     technic_gear_reduced_ring_cell_wall_thickness();
-function technic_gear_reduced_ring_cellular_shell_count( inner_diameter ) =
+function technic_gear_reduced_ring_cellular_nominal_shell_radius( shell_index ) =
     let(
         first = technic_gear_reduced_ring_cell_center_radius(),
-        target = technic_gear_reduced_ring_outer_shell_radius_from_inner_diameter( inner_diameter ),
-        pitch = technic_gear_reduced_ring_cellular_shell_pitch()
+        base_pitch = technic_gear_reduced_ring_cellular_pitch_for_shell( 0 ),
+        growth = technic_gear_reduced_ring_cellular_row_radius_increment()
     )
-    target <= first + 0.0001 ? 1 : 1 + floor( ( target - first ) / pitch );
+    // Sum of all preceding row-to-row pitches.  Since ri(i)=ri0+i*growth,
+    // each transition pitch is ri(i)+ri(i+1)+wall and the closed form is:
+    // first + k*base_pitch + k^2*growth.
+    first + shell_index * base_pitch + shell_index * shell_index * growth;
+function technic_gear_reduced_ring_cellular_shell_count( inner_diameter ) =
+    let(
+        target = technic_gear_reduced_ring_outer_shell_radius_from_inner_diameter( inner_diameter ),
+        first = technic_gear_reduced_ring_cell_center_radius(),
+        base_pitch = technic_gear_reduced_ring_cellular_pitch_for_shell( 0 ),
+        growth = technic_gear_reduced_ring_cellular_row_radius_increment(),
+        // Solve growth*k^2 + base_pitch*k + first <= target.
+        max_index = target <= first + 0.0001
+            ? 0
+            : floor(
+                ( -base_pitch + sqrt( base_pitch * base_pitch + 4 * growth * ( target - first ) ) )
+                / ( 2 * growth )
+            )
+    )
+    max_index + 1;
 function technic_gear_reduced_ring_cellular_shell_radius( inner_diameter, shell_index ) =
     let(
         count = technic_gear_reduced_ring_cellular_shell_count( inner_diameter ),
-        first = technic_gear_reduced_ring_cell_center_radius(),
-        target = technic_gear_reduced_ring_outer_shell_radius_from_inner_diameter( inner_diameter )
+        target = technic_gear_reduced_ring_outer_shell_radius_from_inner_diameter( inner_diameter ),
+        nominal_last = technic_gear_reduced_ring_cellular_nominal_shell_radius( count - 1 ),
+        // Spread any harmless leftover envelope space across the rows.  This
+        // never reduces the source-derived row spacing; it only lets the outer
+        // row approach the tooth-support rim cleanly.
+        extra = count <= 1 ? 0 : max( 0, target - nominal_last )
     )
-    count <= 1 ? first : first + shell_index * ( target - first ) / ( count - 1 );
+    count <= 1
+        ? technic_gear_reduced_ring_cell_center_radius()
+        : technic_gear_reduced_ring_cellular_nominal_shell_radius( shell_index )
+          + extra * shell_index / ( count - 1 );
 function technic_gear_reduced_ring_cellular_cell_count_for_radius( shell_radius, shell_index ) =
     shell_index == 0
         ? 4
@@ -1656,7 +1695,7 @@ function technic_gear_reduced_ring_cellular_cell_count_for_radius( shell_radius,
             4,
             4 * floor(
                 ( PI / 2 ) * shell_radius
-                / technic_gear_reduced_ring_cellular_shell_pitch()
+                / technic_gear_reduced_ring_cellular_pitch_for_shell( shell_index )
             )
         );
 // Cumulative half-cell staggering.  Every scalable shell is offset from the
@@ -1670,29 +1709,14 @@ function technic_gear_reduced_ring_cellular_phase_from_shells( inner_diameter, s
                 shell_index
             );
 function technic_gear_reduced_ring_cellular_outer_radius( shell_radius, cell_count, shell_index ) =
-    // CELLULAR-I13: the full-height circular stiffener is the same physical
-    // 4019 collar at every scale.  Continuous load transfer belongs to the
-    // recessed reduced web underneath, so scalable collars must not inflate
-    // until they blanket the recess.
-    technic_gear_reduced_ring_cell_outer_radius();
+    technic_gear_reduced_ring_cellular_outer_radius_for_shell( shell_index );
 function technic_gear_reduced_ring_cellular_hole_radius( inner_diameter, shell_index, outer_radius ) =
-    let(
-        shell_count = technic_gear_reduced_ring_cellular_shell_count( inner_diameter ),
-        radial_fraction = shell_count <= 1 ? 0 : shell_index / ( shell_count - 1 ),
-        // Smoothstep keeps the center visually close to the 4019 source while
-        // gently opening the relief toward the tooth-support rim.
-        eased_fraction = radial_fraction * radial_fraction * ( 3 - ( 2 * radial_fraction ) ),
-        // At maximum growth, two neighboring outer holes still retain one half
-        // of the source 4019 wall between them at the I13 golf-ball pitch.
-        maximum_radius_growth = technic_gear_reduced_ring_cell_wall_thickness() / 4
-    )
     min(
         outer_radius - ( technic_gear_reduced_ring_cell_wall_thickness() / 2 ),
-        technic_gear_reduced_ring_cell_inner_radius()
-        + ( maximum_radius_growth * eased_fraction )
+        technic_gear_reduced_ring_cellular_hole_radius_for_shell( shell_index )
     );
 
-/** CELLULAR-I14 golf-packed recessed-web + gently graded circular relief.
+/** CELLULAR-I15 golf-packed recessed-web + row-wise growing circular relief.
  *
  * Positive cellular support and negative weight relief are deliberately
  * separated.  The collar lattice is clipped to the reserved tooth-rim inner
@@ -3179,7 +3203,7 @@ module technic_gear(
 		"reduced_pattern", reduced_pattern,
 		body_mode == "reduced" ? reduced_pattern : "inactive",
 		body_mode == "reduced" ? "supported" : "derived",
-		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-i14-golf-packed-radially-graded-relief" : "classic-reduced-pattern",
+		body_mode == "reduced" && reduced_pattern == "ring" ? "wp13e-4019-cellular-i15-row-wise-growing-golf-relief" : "classic-reduced-pattern",
 		debug
 	);
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
