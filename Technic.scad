@@ -883,7 +883,11 @@ technic_ldraw_unit_in_mm = 0.4;
  */
 technic_gear_clutch_reference_half_height_lu = 10;
 technic_gear_clutch_reference_start_z_lu = 2;
-technic_gear_clutch_inner_clearance_radius_lu = 9;
+// Positive mating part 32187 has a 10-LDU inner bore.  The official
+// 81346 mating gear keeps its recess floor at 9 LDU, establishing a
+// 1-LDU nominal radial running allowance for the preserved inner core.
+technic_gear_clutch_positive_bore_radius_lu = 10;
+technic_gear_clutch_nominal_radial_clearance_lu = 1;
 technic_gear_clutch_outer_radius_lu = 14.7171;
 technic_gear_clutch_key_inner_radius_lu = 13.218;
 technic_gear_clutch_key_outer_base_radius_lu = 14.6183;
@@ -913,12 +917,25 @@ function technic_gear_clutch_interface_radius( teeth, resolved_body_topology ) =
  * The pin wall is slightly larger than the 9-LDU reference floor, so pin
  * centers derive the larger radius instead of changing the outer keys.
  */
+function technic_gear_clutch_positive_bore_radius() =
+	technic_gear_clutch_positive_bore_radius_lu * technic_ldraw_unit_in_mm;
+
+function technic_gear_clutch_reference_inner_core_radius() =
+	( technic_gear_clutch_positive_bore_radius_lu - technic_gear_clutch_nominal_radial_clearance_lu )
+	* technic_ldraw_unit_in_mm;
+
+function technic_gear_clutch_center_outer_radius( center ) =
+	center == "pin"
+		? technic_pin_connector_outer_diameter / 2
+		: ( technic_axle_spline_width + 2 * technic_pin_connector_shoulder_wall_thickness ) / 2;
+
+function technic_gear_clutch_positive_bore_gap( center ) =
+	technic_gear_clutch_positive_bore_radius() - technic_gear_clutch_center_outer_radius( center );
+
 function technic_gear_clutch_inner_clearance_radius( center ) =
 	max(
-		technic_gear_clutch_inner_clearance_radius_lu * technic_ldraw_unit_in_mm,
-		center == "pin"
-			? technic_pin_connector_outer_diameter / 2
-			: ( technic_axle_spline_width + 2 * technic_pin_connector_shoulder_wall_thickness ) / 2
+		technic_gear_clutch_reference_inner_core_radius(),
+		technic_gear_clutch_center_outer_radius( center )
 	);
 
 /**
@@ -979,12 +996,14 @@ function technic_gear_clutch_interface_fits( teeth, center, resolved_body_topolo
 		interface_radius = technic_gear_clutch_interface_radius( teeth, resolved_body_topology ),
 		root_radius = technic_gear_double_rim_outer_diameter( teeth ) / 2,
 		inner_clearance = technic_gear_clutch_inner_clearance_radius( center ),
+		positive_bore_gap = technic_gear_clutch_positive_bore_gap( center ),
 		key_inner_radius = technic_gear_clutch_key_inner_radius_lu * technic_ldraw_unit_in_mm,
 		minimum_wall = technic_pin_connector_shoulder_wall_thickness
 	)
 	resolved_body_topology == "solid"
 	&& root_radius - interface_radius >= minimum_wall
-	&& key_inner_radius - inner_clearance >= minimum_wall;
+	&& key_inner_radius - inner_clearance >= minimum_wall
+	&& positive_bore_gap > 0;
 
 /**
  * WP09 reinforced/stepped-tooth reference geometry from LDraw tooth8a.dat.
@@ -2194,6 +2213,8 @@ module technic_gear(
 				"|depth=", clutch_depth,
 				"|outer_radius=", technic_gear_clutch_interface_radius( teeth, resolved_body_topology ),
 				"|inner_clearance=", technic_gear_clutch_inner_clearance_radius( center ),
+				"|positive_bore=", technic_gear_clutch_positive_bore_radius(),
+				"|positive_bore_gap=", technic_gear_clutch_positive_bore_gap( center ),
 				"|z=", technic_gear_clutch_face_z_positions( secondary_feature, effective_height, clutch_depth )
 			) );
 		}
