@@ -880,6 +880,7 @@ function technic_gear_integral_end_projection( end_length ) =
 function technic_gear_integral_end_drive_diameter( end_type ) =
 	end_type == "axle" ? technic_axle_spline_width :
 	end_type == "pin" ? technic_pin_outer_diameter :
+	end_type == "bushing" ? technic_bush_big_diameter :
 	end_type == "none" ? 0 :
 	assert( false, str( "invalid integral end type: ", end_type ) );
 
@@ -892,6 +893,7 @@ function technic_gear_integral_end_drive_diameter( end_type ) =
 function technic_gear_integral_end_external_clearance( end_type ) =
 	end_type == "axle" ? technic_axle_stop_thickness :
 	end_type == "pin" ? technic_pin_collar_thickness :
+	end_type == "bushing" ? technic_bush_shoulder_height :
 	end_type == "none" ? 0 :
 	assert( false, str( "invalid integral end type: ", end_type ) );
 
@@ -1487,6 +1489,69 @@ module technic_frictionless_axle_entry_transition( depth = technic_frictionless_
 }
 
 
+/** Unified connector descriptor grammar. */
+function technic_connector_internal_type_valid( connector ) =
+	_technic_gear_value_in( connector, [ "axle", "pin", "frictionless_axle" ] );
+
+function technic_connector_external_type_valid( connector ) =
+	_technic_gear_value_in( connector, [ "none", "axle", "pin", "bushing" ] );
+
+function technic_connector_external_length_valid( connector, length ) =
+	connector == "none" ? length == 0 : is_num( length ) && length > 0;
+
+function technic_connector_external_reason( connector ) =
+	connector == "none" ? "no-external-connector" :
+	connector == "axle" ? "native-axle-helper-with-stop" :
+	connector == "pin" ? "native-non-friction-pin-helper-with-collar" :
+	connector == "bushing" ? "native-technic-bush-helper" :
+	"invalid-external-connector";
+
+function technic_connector_external_length_reason( connector ) =
+	connector == "none" ? "none-requires-zero-length" : "positive-Technic-unit-length";
+
+/**
+ * Normalise one canonical connector descriptor.
+ * Record: [mode, internal, bottom, top, bottom_length, top_length].
+ */
+function technic_connector_resolve( connector, connector_length = undef ) =
+	is_undef( connector )
+		? assert( is_undef( connector_length ), "connector_length requires an external connector array" )
+			[ "none", undef, "none", "none", 0, 0 ]
+	: is_string( connector )
+		? assert( technic_connector_internal_type_valid( connector ), str( "invalid internal connector: ", connector ) )
+			assert( is_undef( connector_length ), "internal connector length is body-derived; omit connector_length" )
+			[ "internal", connector, "none", "none", 0, 0 ]
+	: is_list( connector )
+		? assert( len( connector ) == 2, "external connector must contain [bottom, top]" )
+			assert( is_list( connector_length ) && len( connector_length ) == 2, "external connector requires connector_length=[bottom,top]" )
+			assert( technic_connector_external_type_valid( connector[0] ), str( "invalid bottom connector: ", connector[0] ) )
+			assert( technic_connector_external_type_valid( connector[1] ), str( "invalid top connector: ", connector[1] ) )
+			assert( technic_connector_external_length_valid( connector[0], connector_length[0] ), str( "invalid bottom connector length: ", connector_length[0] ) )
+			assert( technic_connector_external_length_valid( connector[1], connector_length[1] ), str( "invalid top connector length: ", connector_length[1] ) )
+			[ "external", undef, connector[0], connector[1], connector_length[0], connector_length[1] ]
+	: assert( false, "connector must be undef, an internal connector string, or [bottom,top]" );
+
+function technic_connector_mode( descriptor ) = descriptor[0];
+function technic_connector_internal( descriptor ) = descriptor[1];
+function technic_connector_bottom( descriptor ) = descriptor[2];
+function technic_connector_top( descriptor ) = descriptor[3];
+function technic_connector_bottom_length( descriptor ) = descriptor[4];
+function technic_connector_top_length( descriptor ) = descriptor[5];
+
+module technic_connector_manifest( descriptor, family, debug = false ) {
+	if ( debug ) {
+		echo( str(
+			"TECHNIC_CONNECTOR|family=", family,
+			"|mode=", technic_connector_mode( descriptor ),
+			"|internal=", technic_connector_internal( descriptor ),
+			"|bottom=", technic_connector_bottom( descriptor ),
+			"|top=", technic_connector_top( descriptor ),
+			"|bottom_length=", technic_connector_bottom_length( descriptor ),
+			"|top_length=", technic_connector_top_length( descriptor )
+		) );
+	}
+}
+
 /** Shared centre-interface vocabulary used by single, double and worm gears. */
 function technic_gear_center_type_valid( center ) =
 	_technic_gear_value_in( center, [ "axle", "pin", "frictionless_axle" ] );
@@ -1510,17 +1575,17 @@ function technic_gear_resolve_center_contract(
 	entry_transition = false,
 	bottom_end = "none",
 	top_end = "none",
-	bottom_end_length = 1,
-	top_end_length = 1
+	bottom_end_length = 0,
+	top_end_length = 0
 ) =
 	assert( technic_gear_center_type_valid( center ), str( "invalid center: ", center ) )
 	assert( _technic_gear_value_in( family, [ "single", "double", "worm" ] ), str( "invalid center family: ", family ) )
 	assert( _technic_gear_value_in( construction, [ "bore", "integral" ] ), str( "invalid center construction: ", construction ) )
 	assert( construction != "integral" || family != "worm", "worm integral centre is unsupported" )
-	assert( _technic_gear_value_in( bottom_end, [ "none", "axle", "pin" ] ), str( "invalid bottom end: ", bottom_end ) )
-	assert( _technic_gear_value_in( top_end, [ "none", "axle", "pin" ] ), str( "invalid top end: ", top_end ) )
-	assert( is_num( bottom_end_length ) && bottom_end_length > 0, str( "bottom_end_length must be positive: ", bottom_end_length ) )
-	assert( is_num( top_end_length ) && top_end_length > 0, str( "top_end_length must be positive: ", top_end_length ) )
+	assert( technic_connector_external_type_valid( bottom_end ), str( "invalid bottom end: ", bottom_end ) )
+	assert( technic_connector_external_type_valid( top_end ), str( "invalid top end: ", top_end ) )
+	assert( technic_connector_external_length_valid( bottom_end, bottom_end_length ), str( "invalid bottom end length: ", bottom_end_length ) )
+	assert( technic_connector_external_length_valid( top_end, top_end_length ), str( "invalid top end length: ", top_end_length ) )
 	[
 		center, family, construction, supported, reason, entry_transition,
 		bottom_end, top_end, bottom_end_length, top_end_length
@@ -2945,6 +3010,40 @@ module technic_gear_integral_axle_end_positive( end_length ) {
 	technic_axle( length = end_length, stop = true );
 }
 
+/** Build one external connector from a finished body face along local +Z. */
+module technic_external_connector_positive( connector, connector_length ) {
+	assert( technic_connector_external_type_valid( connector ), str( "invalid external connector: ", connector ) );
+	assert( technic_connector_external_length_valid( connector, connector_length ), str( "invalid external connector length: ", connector_length ) );
+	if ( connector == "axle" ) {
+		technic_gear_integral_axle_end_positive( connector_length );
+	} else if ( connector == "pin" ) {
+		technic_gear_integral_pin_end_positive( connector_length );
+	} else if ( connector == "bushing" ) {
+		technic_bush( height = connector_length, stud_cutouts = false );
+	}
+}
+
+/** Place the canonical [bottom,top] external connector pair at finished faces. */
+module technic_place_external_connectors(
+	family, body_height, bottom_connector, top_connector, bottom_length, top_length
+) {
+	assert( _technic_gear_value_in( family, [ "single", "double", "worm" ] ), str( "invalid connector family: ", family ) );
+	bottom_face_z = family == "double" ? -body_height / 2 : 0;
+	top_face_z = family == "double" ? body_height / 2 : body_height;
+	overlap = technic_gear_integral_attachment_overlap;
+
+	if ( bottom_connector != "none" ) {
+		translate( [ 0, 0, bottom_face_z + overlap ] ) {
+			mirror( [ 0, 0, 1 ] ) technic_external_connector_positive( bottom_connector, bottom_length );
+		}
+	}
+	if ( top_connector != "none" ) {
+		translate( [ 0, 0, top_face_z - overlap ] ) {
+			technic_external_connector_positive( top_connector, top_length );
+		}
+	}
+}
+
 /** Full solid centre plus independent face-attached axle/pin ends. */
 module technic_gear_integral_center_positive(
 	center_contract, axial_form, teeth, gear_height
@@ -2972,44 +3071,28 @@ module technic_gear_integral_center_positive(
 	// The centre is solid gear material. Positive connectors terminate at the
 	// finished gear faces and attach through their flat shoulder/collar regions;
 	// no finished axle primitive runs through the gear body.
-	if ( axial_form == "double" ) {
-		cylinder(
-			d = core_diameter,
-			h = gear_height + ( 2 * technic_gear_integral_attachment_overlap ),
-			center = true
-		);
-	} else {
-		translate( [ 0, 0, -technic_gear_integral_attachment_overlap ] ) {
+	if ( core_diameter > 0 ) {
+		if ( axial_form == "double" ) {
 			cylinder(
 				d = core_diameter,
-				h = gear_height + ( 2 * technic_gear_integral_attachment_overlap )
+				h = gear_height + ( 2 * technic_gear_integral_attachment_overlap ),
+				center = true
 			);
+		} else {
+			translate( [ 0, 0, -technic_gear_integral_attachment_overlap ] ) {
+				cylinder(
+					d = core_diameter,
+					h = gear_height + ( 2 * technic_gear_integral_attachment_overlap )
+				);
+			}
 		}
 	}
 
-	if ( bottom_end == "axle" ) {
-		translate( [ 0, 0, bottom_face_z ] ) {
-			mirror( [ 0, 0, 1 ] ) technic_gear_integral_axle_end_positive( bottom_end_length );
-		}
-	}
-
-	if ( top_end == "axle" ) {
-		translate( [ 0, 0, top_face_z ] ) {
-			technic_gear_integral_axle_end_positive( top_end_length );
-		}
-	}
-
-	if ( bottom_end == "pin" ) {
-		translate( [ 0, 0, bottom_face_z ] ) {
-			mirror( [ 0, 0, 1 ] ) technic_gear_integral_pin_end_positive( bottom_end_length );
-		}
-	}
-
-	if ( top_end == "pin" ) {
-		translate( [ 0, 0, top_face_z ] ) {
-			technic_gear_integral_pin_end_positive( top_end_length );
-		}
-	}
+	technic_place_external_connectors(
+		family = axial_form, body_height = gear_height,
+		bottom_connector = bottom_end, top_connector = top_end,
+		bottom_length = bottom_end_length, top_length = top_end_length
+	);
 }
 
 /** Radial clearance for the singular center connector against the owning body. */
@@ -3498,7 +3581,61 @@ module technic_gear_double_body_positive(
 	}
 }
 
+/**
+ * Canonical unified gear entry using `connector` / `connector_length`.
+ *
+ * Legacy centre/end parameters remain only as an adapter. Do not mix the two
+ * forms in one call. `connector=undef` means no internal or external connector.
+ */
 module technic_gear(
+	axial_form = "double", teeth = 24, gear_height = undef,
+	tooth_sections = "normal", bevel = "none", body_mode = "reduced",
+	reduced_pattern = "classic", hollow_structure = undef,
+	connector = undef, connector_length = undef,
+	secondary_feature = "pin+axle", debug = false,
+	center = undef, center_construction = undef,
+	bottom_end = undef, top_end = undef,
+	bottom_end_length = undef, top_end_length = undef
+) {
+	legacy_used = !is_undef( center ) || !is_undef( center_construction )
+		|| !is_undef( bottom_end ) || !is_undef( top_end )
+		|| !is_undef( bottom_end_length ) || !is_undef( top_end_length );
+	assert( !( legacy_used && !is_undef( connector ) ), "do not mix connector with legacy center/end parameters" );
+	assert( !( legacy_used && !is_undef( connector_length ) ), "do not mix connector_length with legacy center/end parameters" );
+
+	legacy_integral = legacy_used && ( center_construction == "integral" || !is_undef( bottom_end ) || !is_undef( top_end ) );
+	legacy_bottom = is_undef( bottom_end ) ? "none" : bottom_end;
+	legacy_top = is_undef( top_end ) ? "none" : top_end;
+	legacy_bottom_length = legacy_bottom == "none" ? 0 : ( is_undef( bottom_end_length ) ? 1 : bottom_end_length );
+	legacy_top_length = legacy_top == "none" ? 0 : ( is_undef( top_end_length ) ? 1 : top_end_length );
+	resolved_connector = legacy_used
+		? ( legacy_integral ? [ legacy_bottom, legacy_top ] : ( is_undef( center ) ? "axle" : center ) )
+		: connector;
+	resolved_connector_length = legacy_used
+		? ( legacy_integral ? [ legacy_bottom_length, legacy_top_length ] : undef )
+		: connector_length;
+	descriptor = technic_connector_resolve( resolved_connector, resolved_connector_length );
+	mode = technic_connector_mode( descriptor );
+	resolved_center = mode == "internal" ? technic_connector_internal( descriptor ) : "axle";
+	resolved_construction = mode == "internal" ? "bore" : "integral";
+	resolved_bottom = mode == "external" ? technic_connector_bottom( descriptor ) : "none";
+	resolved_top = mode == "external" ? technic_connector_top( descriptor ) : "none";
+	resolved_bottom_length = mode == "external" ? technic_connector_bottom_length( descriptor ) : 0;
+	resolved_top_length = mode == "external" ? technic_connector_top_length( descriptor ) : 0;
+
+	technic_connector_manifest( descriptor, axial_form, debug = debug );
+	_technic_gear_resolved_legacy(
+		axial_form = axial_form, teeth = teeth, gear_height = gear_height,
+		tooth_sections = tooth_sections, bevel = bevel, body_mode = body_mode,
+		reduced_pattern = reduced_pattern, hollow_structure = hollow_structure,
+		center = resolved_center, secondary_feature = secondary_feature, debug = debug,
+		center_construction = resolved_construction,
+		bottom_end = resolved_bottom, top_end = resolved_top,
+		bottom_end_length = resolved_bottom_length, top_end_length = resolved_top_length
+	);
+}
+
+module _technic_gear_resolved_legacy(
 	axial_form = "double",
 	teeth = 24,
 	gear_height = undef,
@@ -3513,8 +3650,8 @@ module technic_gear(
 	center_construction = "bore",
 	bottom_end = "none",
 	top_end = "none",
-	bottom_end_length = 1,
-	top_end_length = 1
+	bottom_end_length = 0,
+	top_end_length = 0
 ) {
 	assert( _technic_gear_value_in( axial_form, [ "single", "double" ] ), str( "invalid axial_form: ", axial_form ) );
 	assert( is_num( teeth ) && teeth > 0 && teeth == floor( teeth ), str( "teeth must be a positive integer: ", teeth ) );
@@ -3527,20 +3664,16 @@ module technic_gear(
 	assert( technic_gear_center_type_valid( center ), str( "invalid center: ", center ) );
 	assert( _technic_gear_value_in( secondary_feature, [ "none", "pin", "axle", "pin+axle", "clutch_single", "clutch_dual" ] ), str( "invalid secondary_feature: ", secondary_feature ) );
 	assert( _technic_gear_value_in( center_construction, [ "bore", "integral" ] ), str( "invalid center_construction: ", center_construction ) );
-	assert( _technic_gear_value_in( bottom_end, [ "none", "axle", "pin" ] ), str( "invalid bottom_end: ", bottom_end ) );
-	assert( _technic_gear_value_in( top_end, [ "none", "axle", "pin" ] ), str( "invalid top_end: ", top_end ) );
-	assert( is_num( bottom_end_length ) && bottom_end_length > 0, str( "bottom_end_length must be positive: ", bottom_end_length ) );
-	assert( is_num( top_end_length ) && top_end_length > 0, str( "top_end_length must be positive: ", top_end_length ) );
-	assert( center_construction != "integral" || axial_form == "double", "integral center currently supports axial_form=double only" );
-	assert( center_construction != "integral" || body_mode == "filled", "integral center currently supports body_mode=filled only" );
-	assert( center_construction != "integral" || secondary_feature == "none", "integral center currently supports secondary_feature=none only" );
+	assert( technic_connector_external_type_valid( bottom_end ), str( "invalid bottom_end: ", bottom_end ) );
+	assert( technic_connector_external_type_valid( top_end ), str( "invalid top_end: ", top_end ) );
+	assert( technic_connector_external_length_valid( bottom_end, bottom_end_length ), str( "invalid bottom_end_length: ", bottom_end_length ) );
+	assert( technic_connector_external_length_valid( top_end, top_end_length ), str( "invalid top_end_length: ", top_end_length ) );
+	external_connector_active = bottom_end != "none" || top_end != "none";
+	assert( center_construction != "integral" || !external_connector_active || body_mode == "filled", "external connectors currently require body_mode=filled" );
+	assert( center_construction != "integral" || !external_connector_active || secondary_feature == "none", "external connectors currently require secondary_feature=none" );
 	assert(
 		center_construction == "integral" || ( bottom_end == "none" && top_end == "none" ),
-		"bottom_end/top_end require center_construction=integral"
-	);
-	assert(
-		center_construction == "bore" || ( bottom_end != "none" && top_end != "none" ),
-		"center_construction=integral requires both bottom_end and top_end"
+		"external connectors require integral construction"
 	);
 
 	normal_height = technic_gear_normal_height( axial_form );
@@ -3691,21 +3824,21 @@ module technic_gear(
 	);
 	_technic_gear_support_record(
 		"bottom_end", bottom_end, bottom_end, integral_end_state,
-		center_construction == "integral" ? ( bottom_end == "pin" ? "non-friction-pin-helper-with-collar" : "half-axle-helper-with-stop-collar" ) : "center-not-integral",
+		center_construction == "integral" ? technic_connector_external_reason( bottom_end ) : "center-not-integral",
 		debug
 	);
 	_technic_gear_support_record(
 		"top_end", top_end, top_end, integral_end_state,
-		center_construction == "integral" ? ( top_end == "pin" ? "non-friction-pin-helper-with-collar" : "half-axle-helper-with-stop-collar" ) : "center-not-integral",
+		center_construction == "integral" ? technic_connector_external_reason( top_end ) : "center-not-integral",
 		debug
 	);
 	_technic_gear_support_record(
 		"bottom_end_length", bottom_end_length, bottom_end_length, center_construction == "integral" ? "supported" : "derived",
-		center_construction == "integral" ? "positive-Technic-unit-length" : "center-not-integral", debug
+		center_construction == "integral" ? technic_connector_external_length_reason( bottom_end ) : "center-not-integral", debug
 	);
 	_technic_gear_support_record(
 		"top_end_length", top_end_length, top_end_length, center_construction == "integral" ? "supported" : "derived",
-		center_construction == "integral" ? "positive-Technic-unit-length" : "center-not-integral", debug
+		center_construction == "integral" ? technic_connector_external_length_reason( top_end ) : "center-not-integral", debug
 	);
 	_technic_gear_support_record(
 		"secondary_feature", secondary_feature, effective_secondary_feature, secondary_state,
@@ -3844,7 +3977,7 @@ module technic_gear_double_sided(
 		axial_form = "double", teeth = teeth,
 		gear_height = width * technic_gear_normal_height( "double" ),
 		tooth_sections = "normal", bevel = "none", body_mode = "reduced",
-		hollow_structure = undef, center = "axle", secondary_feature = "pin+axle"
+		hollow_structure = undef, connector = "axle", secondary_feature = "pin+axle"
 	);
 }
 
@@ -4431,7 +4564,7 @@ module technic_gear_single_sided( teeth = 12, bevel = true, center_hole = "axle"
 	technic_gear(
 		axial_form = "single", teeth = teeth, gear_height = technic_gear_normal_height( "single" ),
 		tooth_sections = "normal", bevel = bevel ? "single" : "none", body_mode = "filled",
-		hollow_structure = undef, center = center_hole, secondary_feature = "none"
+		hollow_structure = undef, connector = center_hole, secondary_feature = "none"
 	);
 }
 
@@ -4945,69 +5078,87 @@ module technic_worm_gear_structural_core( length, lead_angle ) {
 	cylinder( r = root_radius, h = length );
 }
 
-module technic_worm_gear( height = 2, width = 3, opening = "axle", debug = false ) {
+module technic_worm_gear(
+	height = 2, width = 3, connector = "axle", connector_length = undef,
+	opening = undef, debug = false
+) {
 	include <lib/gears/gears.scad>;
 
+	// `opening` is the legacy scalar adapter. Canonical callers use connector.
+	assert( is_undef( opening ) || connector == "axle", "do not mix connector with legacy opening" );
+	resolved_connector = is_undef( opening ) ? connector : opening;
+	descriptor = technic_connector_resolve( resolved_connector, connector_length );
+	mode = technic_connector_mode( descriptor );
 	worm_length = stud_spacing * height;
 	target_outer_diameter = technic_worm_gear_width_unit * width;
 	lead_angle_denominator = target_outer_diameter - ( 5 * technic_worm_gear_modul / 3 );
 
 	assert( height > 0, "technic_worm_gear(): height must be positive" );
-	assert( technic_gear_center_type_valid( opening ), str( "technic_worm_gear(): invalid opening: ", opening ) );
-	center_contract = technic_gear_resolve_center_contract(
-		center = opening, family = "worm", construction = "bore",
-		supported = opening == "axle" || opening == "frictionless_axle",
-		reason = opening == "pin" ? "worm-pin-center-unsupported" : "worm-center-interface-supported",
-		entry_transition = opening == "frictionless_axle"
-	);
-	assert( technic_gear_center_contract_supported( center_contract ),
-		str( "technic_worm_gear(): unsupported center interface: ", technic_gear_center_contract_reason( center_contract ) ) );
 	assert( lead_angle_denominator > technic_worm_gear_modul * technic_worm_gear_thread_starts, "technic_worm_gear(): width is too small for the configured worm geometry" );
-	technic_gear_center_contract_manifest( center_contract, debug = debug );
+	assert( mode != "internal" || technic_connector_internal( descriptor ) != "pin", "technic_worm_gear(): internal pin connector is unsupported" );
+	technic_connector_manifest( descriptor, "worm", debug = debug );
 
 	// lib/gears/worm() has tip diameter D = m*n/sin(lead_angle) + 5*m/3.
-	// Solve that relation directly so width retains its historical 3.5 mm outside-diameter units.
 	lead_angle = asin( ( technic_worm_gear_modul * technic_worm_gear_thread_starts ) / lead_angle_denominator );
+	bushing_axle_passage = mode == "external"
+		&& technic_connector_bottom( descriptor ) == "bushing"
+		&& technic_connector_top( descriptor ) == "bushing";
+	internal_center = mode == "internal" ? technic_connector_internal( descriptor ) : "axle";
+	center_contract = technic_gear_resolve_center_contract(
+		center = internal_center, family = "worm", construction = "bore",
+		supported = mode != "internal" || internal_center == "axle" || internal_center == "frictionless_axle",
+		reason = mode == "internal" && internal_center == "pin" ? "worm-pin-center-unsupported" : "worm-center-interface-supported",
+		entry_transition = mode == "internal" && internal_center == "frictionless_axle"
+	);
 
-	difference() {
-		union() {
-			// Preserve the pinned thread generator call exactly.
-			worm(
-				modul = technic_worm_gear_modul,
-				thread_starts = technic_worm_gear_thread_starts,
-				length = worm_length,
-				bore = 0,
-				lead_angle = lead_angle,
-				pressure_angle = technic_worm_gear_pressure_angle
-			);
+	union() {
+		difference() {
+			union() {
+				// Preserve the pinned thread generator call exactly.
+				worm(
+					modul = technic_worm_gear_modul,
+					thread_starts = technic_worm_gear_thread_starts,
+					length = worm_length, bore = 0, lead_angle = lead_angle,
+					pressure_angle = technic_worm_gear_pressure_angle
+				);
+				technic_worm_gear_structural_core( length = worm_length, lead_angle = lead_angle );
+			}
 
-			// Explicitly own the continuous backing at the generator's root radius.
-			technic_worm_gear_structural_core(
-				length = worm_length,
-				lead_angle = lead_angle
-			);
+			if ( mode == "internal" || bushing_axle_passage ) {
+				// A paired external bushing connector is intrinsically axle-through:
+				// preserve the native bush bores by continuing the same axle passage
+				// through the central worm body. This remains descriptor-level
+				// bushing semantics rather than a hidden internal connector choice.
+				technic_gear_place_center_interface(
+					center_contract = center_contract, body_height = worm_length, operand = "negative"
+				);
+			}
 		}
 
-		if ( debug ) {
-			echo( str(
-				"TECHNIC_WORM_CORE|root_radius=", technic_worm_gear_root_radius( lead_angle ),
-				"|thread_root_clearance=0",
-				"|length=", worm_length
-			) );
-			echo( str(
-				"TECHNIC_WORM_DATUM|axis=", technic_worm_gear_axis,
-				"|handedness=", technic_worm_gear_handedness,
-				"|bottom=", technic_worm_gear_face_datum( worm_length, "bottom" ),
-				"|top=", technic_worm_gear_face_datum( worm_length, "top" ),
-				"|lead_angle=", lead_angle
-			) );
+		if ( mode == "external" ) {
+			technic_place_external_connectors(
+				family = "worm", body_height = worm_length,
+				bottom_connector = technic_connector_bottom( descriptor ),
+				top_connector = technic_connector_top( descriptor ),
+				bottom_length = technic_connector_bottom_length( descriptor ),
+				top_length = technic_connector_top_length( descriptor )
+			);
 		}
+	}
 
-		technic_gear_place_center_interface(
-			center_contract = center_contract,
-			body_height = worm_length,
-			operand = "negative"
-		);
+	if ( debug ) {
+		echo( str(
+			"TECHNIC_WORM_CORE|root_radius=", technic_worm_gear_root_radius( lead_angle ),
+			"|thread_root_clearance=0|length=", worm_length,
+			"|bushing_axle_passage=", bushing_axle_passage
+		) );
+		echo( str(
+			"TECHNIC_WORM_DATUM|axis=", technic_worm_gear_axis,
+			"|handedness=", technic_worm_gear_handedness,
+			"|bottom=", technic_worm_gear_face_datum( worm_length, "bottom" ),
+			"|top=", technic_worm_gear_face_datum( worm_length, "top" ),
+			"|lead_angle=", lead_angle
+		) );
 	}
 }
 

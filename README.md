@@ -446,15 +446,17 @@ Generate a Technic-compatible worm gear.
 ![A worm gear compatible with LEGO part #4716.](images/technic_worm_gear.png)
 
 **Part Support:**
-- `part #4716`:  technic_worm_gear( height = 2, width = 3 );                    // 10mm wide, 16mm tall
-- `part #27938`: technic_worm_gear( height = 1, width = 4 );                    // 13.5mm wide, 8mm tall
-- frictionless axle opening: technic_worm_gear( height = 2, width = 3, opening = "frictionless_axle" );
+- `part #4716`:  technic_worm_gear( height = 2, width = 3 );                    // 10.5mm wide, 16mm tall
+- `part #27938`: technic_worm_gear( height = 1, width = 4 );                    // 14mm wide, 8mm tall
+- frictionless axle opening: technic_worm_gear( height = 2, width = 3, connector = "frictionless_axle" );
+- bushing-ended worm composition: technic_worm_gear( height = 1, width = 3, connector = [ "bushing", "bushing" ], connector_length = [ 1, 1 ] );
 
 **Parameters:**
 
 - `height`: *float* The height of the gear, in Technic units.
-- `width`: *int* The width of the gear, in some unknown units. The two real-world Technic worm gears seem to be roughly multiples of 3.5mm (3x and 4x), and values outside of 3-5 don't really work.
-- `opening`: *string* Centre-interface selector. Supported worm openings are "axle" and "frictionless_axle".
+- `width`: *int* Target outside diameter in 3.5mm units; historical values 3 and 4 target 10.5mm and 14mm respectively.
+- `connector`: *string|array* Scalar internal connector (`"axle"`, `"frictionless_axle"`) or external `[bottom, top]` connector pair. External values are `"none"`, `"axle"`, `"pin"`, and `"bushing"`.
+- `connector_length`: *array* External connector lengths `[bottom, top]`; `"none"` requires `0`, other external connector types require positive lengths.
 
 **Returns:**
 
