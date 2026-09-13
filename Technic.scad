@@ -156,6 +156,10 @@ wheel_spoke_edge_width = 0.9;
 wheel_spoke_width = 3;
 
 technic_worm_gear_diameter = 14; // @todo Measure IRL. Measurement from https://www.briquespassion.fr/en/boutique/101_technic-gear-vis/8605_lego-technic-gear-worm-screw-short
+technic_worm_gear_width_unit = 3.5; // Historical width semantics: target outside diameter per width unit, in mm.
+technic_worm_gear_modul = 1;
+technic_worm_gear_thread_starts = 1;
+technic_worm_gear_pressure_angle = 30;
 technic_worm_gear_end_inset = 0.5; // @todo Measure IRL.
 
 // When OpenSCAD does the preview render, if two objects in a difference() end at exactly
@@ -4670,29 +4674,43 @@ module technic_wheel( diameter = 1, width = 1, center_groove = true, hole_type =
  * ![A worm gear compatible with LEGO part #4716.](images/technic_worm_gear.png)
  *
  * **Part Support:**
- * - `part #4716`:  technic_worm_gear( height = 2, width = 3 );                    // 10mm wide, 16mm tall
- * - `part #27938`: technic_worm_gear( height = 1, width = 4 );                    // 13.5mm wide, 8mm tall
- * - `part #32905`: technic_worm_gear( height = 2, width = 3, opening = "axle2" ); // 10mm wide, 15.7mm tall
+ * - `part #4716`:  technic_worm_gear( height = 2, width = 3 );                    // 10.5mm wide, 16mm tall
+ * - `part #27938`: technic_worm_gear( height = 1, width = 4 );                    // 14mm wide, 8mm tall
+ * - `part #32905`: technic_worm_gear( height = 2, width = 3, opening = "axle2" ); // 10.5mm wide, 16mm tall
  * @param height *float* The height of the gear, in Technic units.
- * @param width *int* The width of the gear, in some unknown units. The two real-world Technic worm gears seem to be roughly multiples of 3.5mm (3x and 4x), and values outside of 3-5 don't really work.
+ * @param width *int* Target outside diameter in 3.5mm units. The historical values 3 and 4 therefore target 10.5mm and 14mm respectively.
  * @param opening *string* Whether the opening should be axle shaped, or the half-axle/half-circle shape that some new gears use. "axle" or "axle2"
  */
 module technic_worm_gear( height = 2, width = 3, opening = "axle" ) {
 	include <lib/gears/gears.scad>;
 
-	// This is BS, but it works for values 1 through 5
-	lead_angle = 102.37 - 106.1667 * width + 44.55417 * width^2 - 8.333333 * width^3 + 0.5758333 * width^4;
+	worm_length = stud_spacing * height;
+	target_outer_diameter = technic_worm_gear_width_unit * width;
+	lead_angle_denominator = target_outer_diameter - ( 5 * technic_worm_gear_modul / 3 );
+
+	assert( height > 0, "technic_worm_gear(): height must be positive" );
+	assert( lead_angle_denominator > technic_worm_gear_modul * technic_worm_gear_thread_starts, "technic_worm_gear(): width is too small for the configured worm geometry" );
+
+	// lib/gears/worm() has tip diameter D = m*n/sin(lead_angle) + 5*m/3.
+	// Solve that relation directly so width retains its historical 3.5 mm outside-diameter units.
+	lead_angle = asin( ( technic_worm_gear_modul * technic_worm_gear_thread_starts ) / lead_angle_denominator );
 
 	difference() {
-		// These parameters appear to be correct, but I can't guarantee that they are.
-		worm( modul = 1, thread_starts = 1, length = technic_height_in_mm * height, bore = 0, lead_angle = lead_angle, pressure_angle = 30 );
+		worm(
+			modul = technic_worm_gear_modul,
+			thread_starts = technic_worm_gear_thread_starts,
+			length = worm_length,
+			bore = 0,
+			lead_angle = lead_angle,
+			pressure_angle = technic_worm_gear_pressure_angle
+		);
 
-		// Remove the axle hole.
+		// Preserve the existing opening behaviour; opening-specific repair is a separate fix.
 		technic_axle_hole( height = height );
 
 		// Remove a little indented circle around the axle at each end.
 		translate( [ 0, 0, -EXTENSION_FOR_DIFFERENCE ] ) cylinder( d = technic_pin_connector_outer_diameter, h = technic_worm_gear_end_inset + EXTENSION_FOR_DIFFERENCE );
-		translate( [ 0, 0, technic_height_in_mm * height - technic_worm_gear_end_inset ] ) cylinder( d = technic_pin_connector_outer_diameter, h = technic_worm_gear_end_inset + EXTENSION_FOR_DIFFERENCE );
+		translate( [ 0, 0, worm_length - technic_worm_gear_end_inset ] ) cylinder( d = technic_pin_connector_outer_diameter, h = technic_worm_gear_end_inset + EXTENSION_FOR_DIFFERENCE );
 	}
 }
 
