@@ -3603,11 +3603,29 @@ module technic_gear(
 	assert( !( legacy_used && !is_undef( connector ) ), "do not mix connector with legacy center/end parameters" );
 	assert( !( legacy_used && !is_undef( connector_length ) ), "do not mix connector_length with legacy center/end parameters" );
 
-	legacy_integral = legacy_used && ( center_construction == "integral" || !is_undef( bottom_end ) || !is_undef( top_end ) );
+	// Validate explicitly supplied legacy values before deriving defaults.  The
+	// adapter must never discard an invalid or contradictory request merely
+	// because a later normalisation step can produce a valid descriptor.
+	assert( is_undef( center_construction ) || _technic_gear_value_in( center_construction, [ "bore", "integral" ] ), str( "invalid center_construction: ", center_construction ) );
+	assert( is_undef( center ) || technic_gear_center_type_valid( center ), str( "invalid center: ", center ) );
+	assert( is_undef( bottom_end ) || technic_connector_external_type_valid( bottom_end ), str( "invalid bottom_end: ", bottom_end ) );
+	assert( is_undef( top_end ) || technic_connector_external_type_valid( top_end ), str( "invalid top_end: ", top_end ) );
+	assert( is_undef( bottom_end_length ) || !is_undef( bottom_end ), "bottom_end_length requires bottom_end" );
+	assert( is_undef( top_end_length ) || !is_undef( top_end ), "top_end_length requires top_end" );
+	assert( is_undef( bottom_end_length ) || technic_connector_external_length_valid( bottom_end, bottom_end_length ), str( "invalid bottom_end_length: ", bottom_end_length ) );
+	assert( is_undef( top_end_length ) || technic_connector_external_length_valid( top_end, top_end_length ), str( "invalid top_end_length: ", top_end_length ) );
+
+	legacy_has_external = !is_undef( bottom_end ) || !is_undef( top_end )
+		|| !is_undef( bottom_end_length ) || !is_undef( top_end_length );
+	assert( center_construction != "bore" || !legacy_has_external, "legacy bore construction cannot be combined with external ends or end lengths" );
+	assert( is_undef( center ) || !legacy_has_external, "legacy internal center cannot be combined with external ends" );
+	assert( center_construction != "integral" || is_undef( center ), "legacy integral construction cannot include an internal center selector" );
+
+	legacy_integral = legacy_used && ( center_construction == "integral" || legacy_has_external );
 	legacy_bottom = is_undef( bottom_end ) ? "none" : bottom_end;
 	legacy_top = is_undef( top_end ) ? "none" : top_end;
-	legacy_bottom_length = legacy_bottom == "none" ? 0 : ( is_undef( bottom_end_length ) ? 1 : bottom_end_length );
-	legacy_top_length = legacy_top == "none" ? 0 : ( is_undef( top_end_length ) ? 1 : top_end_length );
+	legacy_bottom_length = legacy_bottom == "none" ? ( is_undef( bottom_end_length ) ? 0 : bottom_end_length ) : ( is_undef( bottom_end_length ) ? 1 : bottom_end_length );
+	legacy_top_length = legacy_top == "none" ? ( is_undef( top_end_length ) ? 0 : top_end_length ) : ( is_undef( top_end_length ) ? 1 : top_end_length );
 	resolved_connector = legacy_used
 		? ( legacy_integral ? [ legacy_bottom, legacy_top ] : ( is_undef( center ) ? "axle" : center ) )
 		: connector;
@@ -5041,7 +5059,8 @@ module technic_wheel( diameter = 1, width = 1, center_groove = true, hole_type =
  * - `part #27938`: technic_worm_gear( height = 1, width = 4 );                    // 14mm wide, 8mm tall
  * @param height *float* The height of the gear, in Technic units.
  * @param width *int* Target outside diameter in 3.5mm units. The historical values 3 and 4 therefore target 10.5mm and 14mm respectively.
- * @param opening *string* Centre-interface selector. Recognised values are "axle", "pin" and "frictionless_axle"; pin is currently rejected for the worm family.
+ * @param connector *string|array|undef* Canonical centre/external connector descriptor. Defaults to the ordinary axle opening.
+ * @param connector_length *array|undef* External connector lengths for an external descriptor.
  * @param debug *bool* Emit the resolved centre-interface contract.
  */
 /** Calculated part-cylinder radius used by the pinned lib/gears worm generator. */
@@ -5078,16 +5097,27 @@ module technic_worm_gear_structural_core( length, lead_angle ) {
 	cylinder( r = root_radius, h = length );
 }
 
+/**
+ * Legacy worm wrapper retained for source compatibility without introducing a
+ * second selector into technic_worm_gear().  Canonical code must call
+ * technic_worm_gear(connector=...).
+ */
+module technic_worm_gear_legacy(
+	height = 2, width = 3, opening = "axle",
+	connector = undef, connector_length = undef, debug = false
+) {
+	assert( is_undef( connector ) && is_undef( connector_length ), "do not mix connector/connector_length with legacy worm opening" );
+	assert( technic_connector_internal_type_valid( opening ), str( "invalid legacy worm opening: ", opening ) );
+	technic_worm_gear( height = height, width = width, connector = opening, debug = debug );
+}
+
 module technic_worm_gear(
 	height = 2, width = 3, connector = "axle", connector_length = undef,
-	opening = undef, debug = false
+	debug = false
 ) {
 	include <lib/gears/gears.scad>;
 
-	// `opening` is the legacy scalar adapter. Canonical callers use connector.
-	assert( is_undef( opening ) || connector == "axle", "do not mix connector with legacy opening" );
-	resolved_connector = is_undef( opening ) ? connector : opening;
-	descriptor = technic_connector_resolve( resolved_connector, connector_length );
+	descriptor = technic_connector_resolve( connector, connector_length );
 	mode = technic_connector_mode( descriptor );
 	worm_length = stud_spacing * height;
 	target_outer_diameter = technic_worm_gear_width_unit * width;
