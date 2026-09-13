@@ -850,6 +850,104 @@ function technic_gear_tip_diameter( teeth ) = teeth + 2;
 function technic_gear_root_diameter( teeth ) = teeth - 2 * ( 1 + 1 / 6 );
 
 /**
+ * Minimum material separation between a functional drive interface and teeth.
+ * Reuse the established Technic shoulder-wall standard instead of adding a
+ * gear-specific clearance literal.
+ */
+technic_gear_integral_minimum_drive_to_tooth_clearance =
+	technic_pin_connector_shoulder_wall_thickness;
+
+/**
+ * Minimum solid internal diameter beneath the teeth for an integral gear.
+ * Derive it from the same structural-clearance standard on both sides of
+ * the centreline: 2 * 0.6 mm = 1.2 mm with the current Technic constants.
+ */
+technic_gear_integral_minimum_internal_diameter =
+	2 * technic_gear_integral_minimum_drive_to_tooth_clearance;
+
+/** Small positive overlap used only to make each projecting end one connected solid. */
+technic_gear_integral_attachment_overlap = EXTENSION_FOR_DIFFERENCE / 100;
+
+/** Axial projection from a finished gear face for a configured integral end. */
+function technic_gear_integral_end_projection( end_length ) =
+	end_length * technic_height_in_mm;
+
+/** Functional drive envelope; collars/stops are spacing and attachment geometry. */
+function technic_gear_integral_end_drive_diameter( end_type ) =
+	end_type == "axle" ? technic_axle_spline_width :
+	end_type == "pin" ? technic_pin_outer_diameter :
+	end_type == "none" ? 0 :
+	assert( false, str( "invalid integral end type: ", end_type ) );
+
+/**
+ * Axial separation from the tooth face to the first engageable drive section.
+ * Both accepted integral end helpers already provide a collar/stop outside the
+ * tooth span.  This is why an external drive can support smaller tooth counts
+ * without forcing its diameter inside the gear root circle.
+ */
+function technic_gear_integral_end_external_clearance( end_type ) =
+	end_type == "axle" ? technic_axle_stop_thickness :
+	end_type == "pin" ? technic_pin_collar_thickness :
+	end_type == "none" ? 0 :
+	assert( false, str( "invalid integral end type: ", end_type ) );
+
+/** Single-form involute root diameter for the same derived pitch used by its teeth. */
+function technic_gear_single_root_diameter( teeth ) =
+	let(
+		pitch_diameter = technic_gear_single_tooth_pitch_diameter( teeth ),
+		tooth_module = pitch_diameter / teeth
+	)
+	pitch_diameter - 2 * tooth_module * ( 1 + 1 / 6 );
+
+/** Root envelope available without filling the canonical involute tooth spaces. */
+function technic_gear_integral_available_root_diameter( axial_form, teeth ) =
+	axial_form == "double" ? technic_gear_root_diameter( teeth ) :
+	axial_form == "single" ? technic_gear_single_root_diameter( teeth ) :
+	assert( false, str( "invalid axial_form: ", axial_form ) );
+
+/** Radial material distance between an embedded drive envelope and the tooth root. */
+function technic_gear_integral_end_radial_clearance( axial_form, teeth, end_type ) =
+	( technic_gear_integral_available_root_diameter( axial_form, teeth )
+	  - technic_gear_integral_end_drive_diameter( end_type ) ) / 2;
+
+/**
+ * A drive clears the teeth if either:
+ *  - it is external to the toothed span with the required axial separation, or
+ *  - an embedded drive has the required radial material separation.
+ *
+ * This deliberately contains no tooth-count exception. Moving the drive outside
+ * the teeth therefore relaxes the radial restriction automatically.
+ */
+function technic_gear_integral_end_clears_teeth( axial_form, teeth, end_type ) =
+	end_type == "none" ? true :
+	technic_gear_integral_end_external_clearance( end_type )
+		>= technic_gear_integral_minimum_drive_to_tooth_clearance
+	|| technic_gear_integral_end_radial_clearance( axial_form, teeth, end_type )
+		>= technic_gear_integral_minimum_drive_to_tooth_clearance;
+
+/**
+ * Integral-centre applicability is geometry-derived. The canonical tooth-root
+ * core must retain the derived minimum internal diameter, then each drive end
+ * independently satisfies the same drive-to-tooth separation rule. No hard-coded
+ * minimum tooth count or long-body exception is used here.
+ */
+function technic_gear_integral_center_fits(
+	axial_form, teeth, gear_height, bottom_end, top_end, bottom_end_length, top_end_length
+) =
+	technic_gear_integral_available_root_diameter( axial_form, teeth )
+		>= technic_gear_integral_minimum_internal_diameter
+	&& technic_gear_integral_end_clears_teeth( axial_form, teeth, bottom_end )
+	&& technic_gear_integral_end_clears_teeth( axial_form, teeth, top_end );
+
+/** Overall axial length, keeping gear_height as the finished gear-body width. */
+function technic_gear_integral_overall_length(
+	gear_height, bottom_end, top_end, bottom_end_length, top_end_length
+) =
+	gear_height
+	+ ( bottom_end == "none" ? 0 : technic_gear_integral_end_projection( bottom_end_length ) )
+	+ ( top_end == "none" ? 0 : technic_gear_integral_end_projection( top_end_length ) );
+
+/**
  * Return the classic measured reduced-rim inner diameter relationship.
  * This is not a universal bore, hub, or body diameter.
  */
@@ -937,9 +1035,10 @@ function technic_gear_clutch_reference_inner_core_radius() =
 	* technic_ldraw_unit_in_mm;
 
 function technic_gear_clutch_center_outer_radius( center ) =
-	center == "pin"
-		? technic_pin_connector_outer_diameter / 2
-		: ( technic_axle_spline_width + 2 * technic_pin_connector_shoulder_wall_thickness ) / 2;
+	center == "pin" ? technic_pin_connector_outer_diameter / 2 :
+	center == "axle" || center == "integral"
+		? ( technic_axle_spline_width + 2 * technic_pin_connector_shoulder_wall_thickness ) / 2
+		: assert( false, str( "invalid center interface: ", center ) );
 
 function technic_gear_clutch_positive_bore_gap( center ) =
 	technic_gear_clutch_positive_bore_radius() - technic_gear_clutch_center_outer_radius( center );
@@ -2067,12 +2166,14 @@ function technic_gear_double_rim_inner_diameter( teeth, resolved_body_topology )
 /** WP08 double-body hub envelope derived from the selected center interface. */
 function technic_gear_double_hub_diameter( teeth, center, resolved_body_topology ) =
 	let(
-		// Axle hubs need only the spline envelope plus the existing shoulder wall.
-		// Pin centers retain the existing pin-connector outer diameter.
+		// Axle and integral solid centers use the same structural hub envelope.
+		// Pin bore centers retain the existing pin-connector outer diameter.
 		center_wall_diameter = center == "pin"
 			? technic_pin_connector_outer_diameter
-			: technic_axle_spline_width
-				+ ( 2 * technic_pin_connector_shoulder_wall_thickness ),
+			: center == "axle" || center == "integral"
+				? technic_axle_spline_width
+					+ ( 2 * technic_pin_connector_shoulder_wall_thickness )
+				: assert( false, str( "invalid center interface: ", center ) ),
 		envelope_diameter = resolved_body_topology == "solid"
 			? technic_gear_root_diameter( teeth )
 			: technic_gear_double_rim_inner_diameter( teeth, resolved_body_topology )
@@ -2612,6 +2713,86 @@ module technic_gear_place_center_pin( height, shoulder, operand ) {
 	}
 }
 
+/** Build one integral pin from a finished gear face outward along local +Z. */
+module technic_gear_integral_pin_end_positive( end_length ) {
+	// The wrapper owns placement only. Hand the requested Technic length to the
+	// established helper unchanged; its collar and end geometry remain native.
+	technic_pin_half(
+		length = end_length,
+		friction = false,
+		squared_pin_holes = false
+	);
+}
+
+/** Build one integral axle end from a finished gear face outward along local +Z.
+ *
+ * The wrapper owns placement only. Hand the requested Technic length to the
+ * established axle helper unchanged and retain its native stop geometry.
+ */
+module technic_gear_integral_axle_end_positive( end_length ) {
+	technic_axle( length = end_length, stop = true );
+}
+
+/** Full solid centre plus independent face-attached axle/pin ends. */
+module technic_gear_integral_center_positive(
+	axial_form, teeth, gear_height, bottom_end, top_end, bottom_end_length, top_end_length
+) {
+	required_root_diameter = max(
+		technic_gear_integral_end_drive_diameter( bottom_end ),
+		technic_gear_integral_end_drive_diameter( top_end )
+	);
+	// Never widen the interior beyond the canonical tooth-root envelope. External
+	// face collars/stops carry the transition where the drive diameter is larger.
+	core_diameter = min(
+		required_root_diameter,
+		technic_gear_integral_available_root_diameter( axial_form, teeth )
+	);
+	bottom_face_z = axial_form == "double" ? -gear_height / 2 : 0;
+	top_face_z = axial_form == "double" ? gear_height / 2 : gear_height;
+
+	// The centre is solid gear material. Positive connectors terminate at the
+	// finished gear faces and attach through their flat shoulder/collar regions;
+	// no finished axle primitive runs through the gear body.
+	if ( axial_form == "double" ) {
+		cylinder(
+			d = core_diameter,
+			h = gear_height + ( 2 * technic_gear_integral_attachment_overlap ),
+			center = true
+		);
+	} else {
+		translate( [ 0, 0, -technic_gear_integral_attachment_overlap ] ) {
+			cylinder(
+				d = core_diameter,
+				h = gear_height + ( 2 * technic_gear_integral_attachment_overlap )
+			);
+		}
+	}
+
+	if ( bottom_end == "axle" ) {
+		translate( [ 0, 0, bottom_face_z ] ) {
+			mirror( [ 0, 0, 1 ] ) technic_gear_integral_axle_end_positive( bottom_end_length );
+		}
+	}
+
+	if ( top_end == "axle" ) {
+		translate( [ 0, 0, top_face_z ] ) {
+			technic_gear_integral_axle_end_positive( top_end_length );
+		}
+	}
+
+	if ( bottom_end == "pin" ) {
+		translate( [ 0, 0, bottom_face_z ] ) {
+			mirror( [ 0, 0, 1 ] ) technic_gear_integral_pin_end_positive( bottom_end_length );
+		}
+	}
+
+	if ( top_end == "pin" ) {
+		translate( [ 0, 0, top_face_z ] ) {
+			technic_gear_integral_pin_end_positive( top_end_length );
+		}
+	}
+}
+
 /** Radial clearance for the singular center connector against the owning body. */
 function technic_gear_center_radial_clearance_valid( center, axial_form, teeth ) =
 	center == "axle"
@@ -2665,7 +2846,7 @@ function technic_gear_single_hub_reference_body_diameter( teeth ) =
  * correction from leaking into hub geometry during this refactor.
  */
 function technic_gear_single_hub_diameter( teeth, center ) =
-	assert( _technic_gear_value_in( center, [ "axle", "pin" ] ), str( "invalid center: ", center ) )
+	assert( _technic_gear_value_in( center, [ "axle", "pin", "integral" ] ), str( "invalid center: ", center ) )
 	max(
 		technic_gear_12_tooth_hub_diameter,
 		technic_gear_single_hub_reference_body_diameter( teeth ) - technic_gear_single_exposed_tooth_length()
@@ -3107,7 +3288,12 @@ module technic_gear(
 	hollow_structure = undef,
 	center = "axle",
 	secondary_feature = "pin+axle",
-	debug = false
+	debug = false,
+	center_construction = "bore",
+	bottom_end = "none",
+	top_end = "none",
+	bottom_end_length = 1,
+	top_end_length = 1
 ) {
 	assert( _technic_gear_value_in( axial_form, [ "single", "double" ] ), str( "invalid axial_form: ", axial_form ) );
 	assert( is_num( teeth ) && teeth > 0 && teeth == floor( teeth ), str( "teeth must be a positive integer: ", teeth ) );
@@ -3119,6 +3305,22 @@ module technic_gear(
 	assert( is_undef( hollow_structure ) || _technic_gear_value_in( hollow_structure, [ "cross", "frame", "ring" ] ), str( "invalid hollow_structure: ", hollow_structure ) );
 	assert( _technic_gear_value_in( center, [ "axle", "pin" ] ), str( "invalid center: ", center ) );
 	assert( _technic_gear_value_in( secondary_feature, [ "none", "pin", "axle", "pin+axle", "clutch_single", "clutch_dual" ] ), str( "invalid secondary_feature: ", secondary_feature ) );
+	assert( _technic_gear_value_in( center_construction, [ "bore", "integral" ] ), str( "invalid center_construction: ", center_construction ) );
+	assert( _technic_gear_value_in( bottom_end, [ "none", "axle", "pin" ] ), str( "invalid bottom_end: ", bottom_end ) );
+	assert( _technic_gear_value_in( top_end, [ "none", "axle", "pin" ] ), str( "invalid top_end: ", top_end ) );
+	assert( is_num( bottom_end_length ) && bottom_end_length > 0, str( "bottom_end_length must be positive: ", bottom_end_length ) );
+	assert( is_num( top_end_length ) && top_end_length > 0, str( "top_end_length must be positive: ", top_end_length ) );
+	assert( center_construction != "integral" || axial_form == "double", "integral center currently supports axial_form=double only" );
+	assert( center_construction != "integral" || body_mode == "filled", "integral center currently supports body_mode=filled only" );
+	assert( center_construction != "integral" || secondary_feature == "none", "integral center currently supports secondary_feature=none only" );
+	assert(
+		center_construction == "integral" || ( bottom_end == "none" && top_end == "none" ),
+		"bottom_end/top_end require center_construction=integral"
+	);
+	assert(
+		center_construction == "bore" || ( bottom_end != "none" && top_end != "none" ),
+		"center_construction=integral requires both bottom_end and top_end"
+	);
 
 	normal_height = technic_gear_normal_height( axial_form );
 	requested_height = is_undef( gear_height ) ? normal_height : gear_height;
@@ -3140,11 +3342,17 @@ module technic_gear(
 	tooth_section_records = technic_gear_tooth_section_records(
 		teeth, effective_height, effective_tooth_sections, resolved_body_topology
 	);
-	effective_center = center;
+	center_interface = center_construction == "integral" ? "integral" : center;
+	effective_center = center_construction == "bore" ? center : "inactive";
+	integral_fits = center_construction == "integral"
+		? technic_gear_integral_center_fits(
+			axial_form, teeth, effective_height, bottom_end, top_end,
+			bottom_end_length, top_end_length
+		) : true;
 	clutch_requested = axial_form == "double"
 		&& ( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" );
 	clutch_fits = clutch_requested
-		? technic_gear_clutch_interface_fits( teeth, center, resolved_body_topology ) : false;
+		? technic_gear_clutch_interface_fits( teeth, center_interface, resolved_body_topology ) : false;
 	effective_secondary_feature = axial_form == "double"
 		? ( clutch_requested
 			? ( clutch_fits ? secondary_feature : "none" )
@@ -3160,14 +3368,14 @@ module technic_gear(
 			? technic_gear_hollow_frame_rim_inner_diameter( teeth )
 			: technic_gear_double_rim_inner_diameter( teeth, resolved_body_topology ) )
 		: 0;
-	body_hub_diameter = axial_form == "double" ? technic_gear_double_hub_diameter( teeth, center, resolved_body_topology ) : 0;
+	body_hub_diameter = axial_form == "double" ? technic_gear_double_hub_diameter( teeth, center_interface, resolved_body_topology ) : 0;
 	hollow_valid = axial_form == "double" && body_mode == "hollow"
-		? technic_gear_hollow_structure_valid( teeth, hollow_structure, center, effective_secondary_feature )
+		? technic_gear_hollow_structure_valid( teeth, hollow_structure, center_interface, effective_secondary_feature)
 		: false;
 	hollow_member_width = hollow_valid
-		? technic_gear_hollow_member_width( teeth, hollow_structure, center, effective_secondary_feature ) : 0;
+		? technic_gear_hollow_member_width( teeth, hollow_structure, center_interface, effective_secondary_feature ) : 0;
 	hollow_nodes = hollow_valid
-		? technic_gear_hollow_structure_nodes( teeth, hollow_structure, center, effective_secondary_feature ) : [];
+		? technic_gear_hollow_structure_nodes( teeth, hollow_structure, center_interface, effective_secondary_feature ) : [];
 	hollow_edges = hollow_valid ? technic_gear_hollow_structure_edges( hollow_nodes, hollow_structure, teeth ) : [];
 	height_state = "supported";
 	tooth_sections_state = tooth_sections == effective_tooth_sections ? "supported" : "fallback";
@@ -3175,7 +3383,11 @@ module technic_gear(
 	body_mode_state = axial_form == "double"
 		? ( body_mode == "hollow" ? ( hollow_valid ? "supported" : "missing" ) : "supported" )
 		: body_mode == "hollow" ? "missing" : ( body_mode == effective_body_mode ? "supported" : "fallback" );
-	center_state = "supported";
+	center_state = center_construction == "bore" ? "supported" : "derived";
+	center_construction_state = center_construction == "integral"
+		? ( integral_fits ? "supported" : "missing" ) : "supported";
+	integral_end_state = center_construction == "integral"
+		? ( integral_fits ? "supported" : "missing" ) : "derived";
 	secondary_state = axial_form == "double"
 		? ( clutch_requested
 			? ( clutch_fits ? "supported" : "missing" )
@@ -3213,7 +3425,36 @@ module technic_gear(
 		debug
 	);
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
-	_technic_gear_support_record( "center", center, effective_center, center_state, axial_form == "double" && center == "pin" ? "cross-interface-reuse" : "legacy-path", debug );
+	_technic_gear_support_record(
+		"center", center, effective_center, center_state,
+		center_construction == "integral" ? "inactive-for-integral-center" : axial_form == "double" && center == "pin" ? "cross-interface-reuse" : "legacy-path",
+		debug
+	);
+	_technic_gear_support_record(
+		"center_construction", center_construction, center_construction, center_construction_state,
+		center_construction == "integral"
+			? ( integral_fits ? "integral-structural-envelope-valid" : "integral-internal-diameter-or-drive-clearance-invalid" )
+			: "legacy-bore-center",
+		debug
+	);
+	_technic_gear_support_record(
+		"bottom_end", bottom_end, bottom_end, integral_end_state,
+		center_construction == "integral" ? ( bottom_end == "pin" ? "non-friction-pin-helper-with-collar" : "half-axle-helper-with-stop-collar" ) : "center-not-integral",
+		debug
+	);
+	_technic_gear_support_record(
+		"top_end", top_end, top_end, integral_end_state,
+		center_construction == "integral" ? ( top_end == "pin" ? "non-friction-pin-helper-with-collar" : "half-axle-helper-with-stop-collar" ) : "center-not-integral",
+		debug
+	);
+	_technic_gear_support_record(
+		"bottom_end_length", bottom_end_length, bottom_end_length, center_construction == "integral" ? "supported" : "derived",
+		center_construction == "integral" ? "positive-Technic-unit-length" : "center-not-integral", debug
+	);
+	_technic_gear_support_record(
+		"top_end_length", top_end_length, top_end_length, center_construction == "integral" ? "supported" : "derived",
+		center_construction == "integral" ? "positive-Technic-unit-length" : "center-not-integral", debug
+	);
 	_technic_gear_support_record(
 		"secondary_feature", secondary_feature, effective_secondary_feature, secondary_state,
 		secondary_state == "supported"
@@ -3249,6 +3490,30 @@ module technic_gear(
 			"|edges=", len( hollow_edges )
 		) );
 
+		if ( center_construction == "integral" ) {
+			echo( str(
+				"TECHNIC_GEAR_INTEGRAL|fits=", integral_fits,
+				"|bottom_end=", bottom_end,
+				"|top_end=", top_end,
+				"|root_available=", technic_gear_integral_available_root_diameter( axial_form, teeth ),
+				"|minimum_internal_diameter=", technic_gear_integral_minimum_internal_diameter,
+				"|minimum_drive_to_tooth_clearance=", technic_gear_integral_minimum_drive_to_tooth_clearance,
+				"|bottom_external_clearance=", technic_gear_integral_end_external_clearance( bottom_end ),
+				"|top_external_clearance=", technic_gear_integral_end_external_clearance( top_end ),
+				"|bottom_radial_clearance=", technic_gear_integral_end_radial_clearance( axial_form, teeth, bottom_end ),
+				"|top_radial_clearance=", technic_gear_integral_end_radial_clearance( axial_form, teeth, top_end ),
+				"|bottom_clears_teeth=", technic_gear_integral_end_clears_teeth( axial_form, teeth, bottom_end ),
+				"|top_clears_teeth=", technic_gear_integral_end_clears_teeth( axial_form, teeth, top_end ),
+				"|bottom_end_length=", bottom_end_length,
+				"|top_end_length=", top_end_length,
+				"|bottom_projection=", technic_gear_integral_end_projection( bottom_end_length ),
+				"|top_projection=", technic_gear_integral_end_projection( top_end_length ),
+				"|overall_length=", technic_gear_integral_overall_length(
+					effective_height, bottom_end, top_end, bottom_end_length, top_end_length
+				)
+			) );
+		}
+
 		if ( clutch_requested ) {
 			clutch_depth = technic_gear_clutch_interface_depth( effective_height );
 			echo( str(
@@ -3265,14 +3530,22 @@ module technic_gear(
 	}
 
 	assert( technic_gear_axial_dimensions_valid( axial_form, effective_height, axial_form == "double" ? resolved_body_topology : undef ), str( "gear_height produces invalid axial dimensions: ", effective_height ) );
-	assert( technic_gear_center_radial_clearance_valid( effective_center, axial_form, teeth ), str( "center connector lacks radial clearance: center=", effective_center, ", axial_form=", axial_form, ", teeth=", teeth ) );
+	assert( center_construction == "integral" || technic_gear_center_radial_clearance_valid( effective_center, axial_form, teeth ), str( "center connector lacks radial clearance: center=", effective_center, ", axial_form=", axial_form, ", teeth=", teeth ) );
+	assert(
+		center_construction != "integral" || integral_fits,
+		str(
+			"integral center does not fit the requested gear: axial_form=", axial_form,
+			", teeth=", teeth, ", bottom_end=", bottom_end, ", top_end=", top_end
+		)
+	);
 
+	if ( integral_fits ) {
 	if ( axial_form == "double" ) {
 		// A valid-but-unimplemented clutch request must remain visibly missing.
 		// Do not substitute either an unclutched double gear or the single-form path.
 		if ( !( clutch_requested && !clutch_fits ) ) {
 			_technic_gear_double_sided_legacy(
-				teeth = teeth, gear_height = effective_height, center = effective_center,
+				teeth = teeth, gear_height = effective_height, center = center_interface,
 				body_mode = effective_body_mode, reduced_pattern = reduced_pattern, secondary_feature = effective_secondary_feature,
 				resolved_body_topology = resolved_body_topology,
 				resolved_tooth_height = resolved_tooth_height,
@@ -3280,11 +3553,19 @@ module technic_gear(
 				bevel = effective_bevel,
 				body_root_diameter = body_root_diameter, body_inner_diameter = body_inner_diameter,
 				body_hub_diameter = body_hub_diameter, hollow_structure = hollow_structure,
-				hollow_member_width = hollow_member_width, hollow_nodes = hollow_nodes, hollow_edges = hollow_edges
+				hollow_member_width = hollow_member_width, hollow_nodes = hollow_nodes, hollow_edges = hollow_edges,
+				bottom_end = bottom_end, top_end = top_end,
+				bottom_end_length = bottom_end_length, top_end_length = top_end_length
 			);
 		}
 	} else {
-		_technic_gear_single_assembly( teeth = teeth, bevel = effective_bevel == "single", center_hole = effective_center, gear_height = effective_height, body_mode = effective_body_mode );
+		_technic_gear_single_assembly(
+			teeth = teeth, bevel = effective_bevel == "single", center_hole = center_interface,
+			gear_height = effective_height, body_mode = effective_body_mode,
+			bottom_end = bottom_end, top_end = top_end,
+			bottom_end_length = bottom_end_length, top_end_length = top_end_length
+		);
+	}
 	}
 }
 
@@ -3339,16 +3620,46 @@ module technic_gear_normal_tooth_solid(
 	section_root_diameter = effective_pitch_diameter
 		- 2 * tooth_module * ( 1 + 1 / 6 );
 
-	translate( [ 0, 0, - ( height / 2 ) ] ) {
-		spur_gear( modul = tooth_module, tooth_number = teeth, width = height, bore = bore_diameter, pressure_angle=20, optimized = false );
-	};
 
-	// The vendor gear leaves tiny gaps at the tooth-root corners. This ring is
-	// the minimum positive overlap needed to connect those roots to the body.
-	difference() {
-		cylinder( d = section_root_diameter, h = height, center = true );
-		cylinder( d = bore_diameter - ( EXTENSION_FOR_DIFFERENCE / 2 ), h = height + EXTENSION_FOR_DIFFERENCE, center = true );
-	};
+	// Very small root envelopes expose a vendor-CGAL triangulation artefact:
+	// overlapping bore cuts can leave zero-volume coplanar STL sheets even
+	// though the physical solid is connected. Switch only the Boolean evaluation
+	// strategy below the existing axle-plus-wall envelope; the resulting set is
+	// identical and production topology remains unchanged.
+	single_bore_boolean_limit = technic_axle_spline_width
+		+ 2 * technic_pin_connector_shoulder_wall_thickness;
+	use_single_bore_boolean = section_root_diameter < single_bore_boolean_limit;
+
+	if ( use_single_bore_boolean ) {
+		difference() {
+			union() {
+				translate( [ 0, 0, - ( height / 2 ) ] ) {
+					spur_gear( modul = tooth_module, tooth_number = teeth, width = height, bore = 0, pressure_angle=20, optimized = false );
+				}
+
+				// Fill the vendor tooth-root corner gaps before the sole bore cut.
+				cylinder( d = section_root_diameter, h = height, center = true );
+			}
+
+			cylinder(
+				d = bore_diameter - ( EXTENSION_FOR_DIFFERENCE / 2 ),
+				h = height + EXTENSION_FOR_DIFFERENCE,
+				center = true
+			);
+		}
+	} else {
+		translate( [ 0, 0, - ( height / 2 ) ] ) {
+			spur_gear( modul = tooth_module, tooth_number = teeth, width = height, bore = bore_diameter, pressure_angle=20, optimized = false );
+		}
+
+		// The vendor gear leaves tiny gaps at the tooth-root corners. This ring is
+		// the minimum positive overlap needed to connect those roots to the body.
+		difference() {
+			cylinder( d = section_root_diameter, h = height, center = true );
+			cylinder( d = bore_diameter - ( EXTENSION_FOR_DIFFERENCE / 2 ), h = height + EXTENSION_FOR_DIFFERENCE, center = true );
+		}
+	}
+
 }
 
 /** Compose all normal/stepped tooth sections from the one common tooth solid. */
@@ -3684,7 +3995,11 @@ module _technic_gear_double_sided_legacy(
 	hollow_structure = undef,
 	hollow_member_width = 0,
 	hollow_nodes = [],
-	hollow_edges = []
+	hollow_edges = [],
+	bottom_end = "none",
+	top_end = "none",
+	bottom_end_length = 1,
+	top_end_length = 1
 ) {
 	include <lib/gears/gears.scad>;
 
@@ -3775,14 +4090,16 @@ module _technic_gear_double_sided_legacy(
 			// of replacing it with a bespoke center primitive.
 			if ( resolved_body_topology == "reduced" && reduced_pattern == "ring" ) {
 				if ( technic_gear_reduced_ring_shell_count_from_inner_diameter( body_inner_diameter ) == 1 ) {
-					// Preserve the exact accepted-looking 4019 one-shell Boolean path.
-					technic_gear_reduced_ring_open_axle_relief_negative( height = gear_height );
+					// Preserve the exact accepted-looking 4019 one-shell opening path.
+					if ( center != "integral" )
+						technic_gear_reduced_ring_open_axle_relief_negative( height = gear_height );
 					technic_gear_reduced_ring_openings_negative( height = gear_height, inner_diameter = body_inner_diameter );
 				} else {
 					// Large patterns cut one selected circular relief field through both
 					// the full-height collars and the thin reduced web.
 					union() {
-						technic_gear_reduced_ring_open_axle_relief_negative( height = gear_height );
+						if ( center != "integral" )
+							technic_gear_reduced_ring_open_axle_relief_negative( height = gear_height );
 						technic_gear_reduced_ring_cellular_openings_negative(
 							height = gear_height, inner_diameter = body_inner_diameter
 						);
@@ -3837,6 +4154,14 @@ module _technic_gear_double_sided_legacy(
 				bore_diameter = tooth_bore_diameter
 			);
 		}
+
+		if ( center == "integral" ) {
+			technic_gear_integral_center_positive(
+				axial_form = "double", teeth = teeth, gear_height = gear_height,
+				bottom_end = bottom_end, top_end = top_end,
+				bottom_end_length = bottom_end_length, top_end_length = top_end_length
+			);
+		}
 	}
 }
 
@@ -3864,7 +4189,12 @@ module technic_gear_single_sided( teeth = 12, bevel = true, center_hole = "axle"
 	);
 }
 
-module _technic_gear_single_assembly( teeth = 12, bevel = true, center_hole = "axle", gear_height = technic_gear_normal_height( "single" ), body_mode = "filled" ) {
+module _technic_gear_single_assembly(
+	teeth = 12, bevel = true, center_hole = "axle",
+	gear_height = technic_gear_normal_height( "single" ), body_mode = "filled",
+	bottom_end = "none", top_end = "none",
+	bottom_end_length = 1, top_end_length = 1
+) {
 	lip_height = technic_gear_single_lip_height( gear_height );
 	base_height = technic_gear_single_base_height( gear_height );
 	tooth_height = technic_gear_single_tooth_height( gear_height );
@@ -3874,6 +4204,7 @@ module _technic_gear_single_assembly( teeth = 12, bevel = true, center_hole = "a
 	center_pin_shoulder = true;
 	center_pin_z = lip_height + center_pin_height / 2;
 
+	union() {
 	difference() {
 		union() {
 			technic_gear_single_lip_solid(
@@ -3936,6 +4267,15 @@ module _technic_gear_single_assembly( teeth = 12, bevel = true, center_hole = "a
 				);
 			}
 		}
+	}
+
+	if ( center_hole == "integral" ) {
+		technic_gear_integral_center_positive(
+			axial_form = "single", teeth = teeth, gear_height = gear_height,
+			bottom_end = bottom_end, top_end = top_end,
+			bottom_end_length = bottom_end_length, top_end_length = top_end_length
+		);
+	}
 	}
 }
 
