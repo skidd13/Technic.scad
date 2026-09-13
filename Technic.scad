@@ -4911,6 +4911,31 @@ module technic_wheel( diameter = 1, width = 1, center_groove = true, hole_type =
  * @param opening *string* Centre-interface selector. Recognised values are "axle", "pin" and "frictionless_axle"; pin is currently rejected for the worm family.
  * @param debug *bool* Emit the resolved centre-interface contract.
  */
+/** Calculated part-cylinder radius used by the pinned lib/gears worm generator. */
+function technic_worm_gear_part_radius( lead_angle ) =
+	technic_worm_gear_modul * technic_worm_gear_thread_starts / ( 2 * sin( lead_angle ) );
+
+/** Root radius of the worm thread; this is the maximum structural-core radius. */
+function technic_worm_gear_root_radius( lead_angle ) =
+	technic_worm_gear_part_radius( lead_angle )
+	- technic_worm_gear_modul
+	- technic_worm_gear_modul / 6;
+
+/**
+ * Explicit worm structural core.
+ *
+ * lib/gears/worm() already owns the same root cylinder internally. Keeping the
+ * core at exactly the calculated root radius makes that support invariant
+ * inspectable without changing the pinned helical thread call or intruding
+ * into the thread root.
+ */
+module technic_worm_gear_structural_core( length, lead_angle ) {
+	root_radius = technic_worm_gear_root_radius( lead_angle );
+	assert( is_num( length ) && length > 0, str( "invalid worm core length: ", length ) );
+	assert( root_radius > 0, str( "invalid worm root radius: ", root_radius ) );
+	cylinder( r = root_radius, h = length );
+}
+
 module technic_worm_gear( height = 2, width = 3, opening = "axle", debug = false ) {
 	include <lib/gears/gears.scad>;
 
@@ -4936,14 +4961,31 @@ module technic_worm_gear( height = 2, width = 3, opening = "axle", debug = false
 	lead_angle = asin( ( technic_worm_gear_modul * technic_worm_gear_thread_starts ) / lead_angle_denominator );
 
 	difference() {
-		worm(
-			modul = technic_worm_gear_modul,
-			thread_starts = technic_worm_gear_thread_starts,
-			length = worm_length,
-			bore = 0,
-			lead_angle = lead_angle,
-			pressure_angle = technic_worm_gear_pressure_angle
-		);
+		union() {
+			// Preserve the pinned thread generator call exactly.
+			worm(
+				modul = technic_worm_gear_modul,
+				thread_starts = technic_worm_gear_thread_starts,
+				length = worm_length,
+				bore = 0,
+				lead_angle = lead_angle,
+				pressure_angle = technic_worm_gear_pressure_angle
+			);
+
+			// Explicitly own the continuous backing at the generator's root radius.
+			technic_worm_gear_structural_core(
+				length = worm_length,
+				lead_angle = lead_angle
+			);
+		}
+
+		if ( debug ) {
+			echo( str(
+				"TECHNIC_WORM_CORE|root_radius=", technic_worm_gear_root_radius( lead_angle ),
+				"|thread_root_clearance=0",
+				"|length=", worm_length
+			) );
+		}
 
 		technic_gear_place_center_interface(
 			center_contract = center_contract,
