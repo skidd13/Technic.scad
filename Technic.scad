@@ -4921,6 +4921,15 @@ function technic_worm_gear_root_radius( lead_angle ) =
 	- technic_worm_gear_modul
 	- technic_worm_gear_modul / 6;
 
+/** Worm-only orientation contract. */
+technic_worm_gear_axis = [ 0, 0, 1 ];
+technic_worm_gear_handedness = "clockwise"; // lib/gears: positive lead angle is clockwise.
+
+/** Finished worm-body face datum measured on the worm axis. */
+function technic_worm_gear_face_datum( length, face ) =
+	assert( face == "bottom" || face == "top", str( "invalid worm face: ", face ) )
+	face == "bottom" ? 0 : length;
+
 /**
  * Explicit worm structural core.
  *
@@ -4984,6 +4993,13 @@ module technic_worm_gear( height = 2, width = 3, opening = "axle", debug = false
 				"TECHNIC_WORM_CORE|root_radius=", technic_worm_gear_root_radius( lead_angle ),
 				"|thread_root_clearance=0",
 				"|length=", worm_length
+			) );
+			echo( str(
+				"TECHNIC_WORM_DATUM|axis=", technic_worm_gear_axis,
+				"|handedness=", technic_worm_gear_handedness,
+				"|bottom=", technic_worm_gear_face_datum( worm_length, "bottom" ),
+				"|top=", technic_worm_gear_face_datum( worm_length, "top" ),
+				"|lead_angle=", lead_angle
 			) );
 		}
 

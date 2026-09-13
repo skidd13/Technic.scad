@@ -1,34 +1,37 @@
 /**
- * LEGO and Technic are trademarks of the LEGO Group.
+ * Worm-only examples for the unified centre-interface line.
  *
- * For standard LEGO-compatible bricks, see LEGO.scad. This module
- * is specifically for parts without studs, like gears and axles.
- *
- * Copyright (c) 2025 Christopher Finke (cfinke@gmail.com)
- *
- * Permission is hereby granted, free of charge, to any person obtaining
- * a copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sublicense, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
- * LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
- * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
- * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * Render one example independently with:
+ *   openscad -D 'example="long_axle"' -o long_axle.stl examples/technic_worm_gear.scad
+ * Valid values: "all", "long_axle", "short_axle", "frictionless_axle".
  */
-
 include <../Technic.scad>;
 
-color( "beige" ) translate( [ 0, 0, 0 ] ) technic_worm_gear( height = 1, width = 4 );
-color( "gray" ) translate( [ 0, 30, 0 ] ) technic_worm_gear( height = 2, width = 3 );
-color( "red" ) translate( [ 30, 0, 0 ] ) technic_worm_gear( height = 2, width = 5, opening = "frictionless_axle" );
-color( "yellow" ) translate( [ -30, 0, 0 ] ) technic_worm_gear( height = 4, width = 3 );
+example = is_undef( example ) ? "all" : example;
+
+module worm_example_long_axle() {
+	technic_worm_gear( height = 2, width = 3, opening = "axle" );
+}
+
+module worm_example_short_axle() {
+	technic_worm_gear( height = 1, width = 4, opening = "axle" );
+}
+
+module worm_example_frictionless_axle() {
+	technic_worm_gear( height = 2, width = 3, opening = "frictionless_axle" );
+}
+
+assert(
+	example == "all" || example == "long_axle" || example == "short_axle" || example == "frictionless_axle",
+	str( "unknown worm example: ", example )
+);
+
+if ( example == "all" || example == "long_axle" ) {
+	translate( [ 0, 0, 0 ] ) color( "beige" ) worm_example_long_axle();
+}
+if ( example == "all" || example == "short_axle" ) {
+	translate( [ 20, 0, 0 ] ) color( "gray" ) worm_example_short_axle();
+}
+if ( example == "all" || example == "frictionless_axle" ) {
+	translate( [ 40, 0, 0 ] ) color( "red" ) worm_example_frictionless_axle();
+}
