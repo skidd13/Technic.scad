@@ -30,5 +30,5 @@ include <../Technic.scad>;
 
 color( "beige" ) translate( [ 0, 0, 0 ] ) technic_worm_gear( height = 1, width = 4 );
 color( "gray" ) translate( [ 0, 30, 0 ] ) technic_worm_gear( height = 2, width = 3 );
-color( "red" ) translate( [ 30, 0, 0 ] ) technic_worm_gear( height = 2, width = 5, opening = "axle2" );
+color( "red" ) translate( [ 30, 0, 0 ] ) technic_worm_gear( height = 2, width = 5, opening = "frictionless_axle" );
 color( "yellow" ) translate( [ -30, 0, 0 ] ) technic_worm_gear( height = 4, width = 3 );

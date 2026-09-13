@@ -1138,6 +1138,35 @@ technic_gear_stepped_reference_outer_axial_units = 5.05;
 technic_gear_stepped_reference_outer_center_units = 7.275;
 technic_gear_stepped_reference_crown_radial_inset = ( 5.43 - 2.10 ) * 0.4;
 
+/**
+ * Generic two-toothed frictionless axle hole.
+ *
+ * The retained 11955-vs-10928 experiment supports treating this as a reusable
+ * Technic centre interface: the reinforced 8T body/tooth placement stays the
+ * same and only the centre opening changes. The opening reaches 6 LDU radially;
+ * a valid owning body retains the established 0.6 mm minimum radial material.
+ */
+technic_frictionless_axle_outer_radius_lu = 6;
+technic_frictionless_axle_tooth_flat_lu = 2;
+technic_frictionless_axle_tooth_edge_lu = 5.602;
+technic_frictionless_axle_tooth_arc_x_lu = 5.543;
+technic_frictionless_axle_tooth_arc_y_lu = 2.296;
+// Optional circular entry treatment used where the owning composition exposes
+// the frictionless axle opening through a short round lead-in. The retained
+// reference measurement for this treatment is 1.5 LDU deep.
+technic_frictionless_axle_entry_transition_depth_lu = 1.5;
+technic_frictionless_axle_minimum_support_diameter_lu = 15; // 2 * (6 LDU opening + 1.5 LDU minimum wall).
+technic_gear_stepped_center_support_radius_lu = 7.5;
+
+function technic_frictionless_axle_outer_radius() =
+	technic_frictionless_axle_outer_radius_lu * technic_ldraw_unit_in_mm;
+function technic_frictionless_axle_entry_transition_depth() =
+	technic_frictionless_axle_entry_transition_depth_lu * technic_ldraw_unit_in_mm;
+function technic_gear_stepped_center_support_diameter() =
+	2 * technic_gear_stepped_center_support_radius_lu * technic_ldraw_unit_in_mm;
+function technic_frictionless_axle_minimum_support_diameter() =
+	technic_frictionless_axle_minimum_support_diameter_lu * technic_ldraw_unit_in_mm;
+
 /** Accessors for one [pitch_diameter, height, z] tooth-section record. */
 function technic_gear_tooth_section_pitch_diameter( record ) = record[ 0 ];
 function technic_gear_tooth_section_height( record ) = record[ 1 ];
@@ -1394,6 +1423,67 @@ module technic_gear_axle_entry_relief_cutout(
  */
 module technic_gear_axle_hole_fixed( height ) {
 	technic_axle_hole( height = height );
+}
+
+/**
+ * One fitted axle-hole tooth in the retained reference quadrant.
+ * The profile uses the recorded 2-LDU flat and fitted transition coordinates
+ * within the 6-LDU circular envelope.
+ */
+module _technic_frictionless_axle_tooth_2d() {
+	s = technic_ldraw_unit_in_mm;
+	// Extend the tooth's circular outer boundary beyond the hole circle so the
+	// Boolean has positive overlap rather than coincident curved edges. The
+	// intersection inside the nominal 6-LDU envelope remains LDraw-derived.
+	boolean_outer_radius = technic_frictionless_axle_outer_radius() + EXTENSION_FOR_DIFFERENCE;
+	polygon( points = concat(
+		[
+			[ technic_frictionless_axle_tooth_flat_lu * s, technic_frictionless_axle_tooth_flat_lu * s ],
+			[ technic_frictionless_axle_tooth_edge_lu * s, technic_frictionless_axle_tooth_flat_lu * s ],
+			[ technic_frictionless_axle_tooth_arc_x_lu * s, technic_frictionless_axle_tooth_arc_y_lu * s ]
+		],
+		[ for ( a = [ 22.5 : 5.625 : 67.5 ] )
+			[ boolean_outer_radius * cos( a ), boolean_outer_radius * sin( a ) ]
+		],
+		[
+			[ technic_frictionless_axle_tooth_arc_y_lu * s, technic_frictionless_axle_tooth_arc_x_lu * s ],
+			[ technic_frictionless_axle_tooth_flat_lu * s, technic_frictionless_axle_tooth_edge_lu * s ]
+		]
+	) );
+}
+
+/**
+ * Geometry-only fixed-phase frictionless axle hole.
+ *
+ * This reproduces the retained two-toothed reference topology: a 6-LDU circular
+ * opening with two opposite axle-hole teeth in the II/IV quadrants. Axial entry
+ * treatments are deliberately separate because the 11955 transfer experiment
+ * terminates this opening directly at both faces.
+ */
+module technic_frictionless_axle_hole_fixed( height ) {
+	assert( is_num( height ) && height > 0, str( "invalid frictionless axle cutter height: ", height ) );
+	linear_extrude( height = height + EXTENSION_FOR_DIFFERENCE, center = true, convexity = 10 ) {
+		difference() {
+			circle( r = technic_frictionless_axle_outer_radius(), $fn = 96 );
+			mirror( [ 0, 1, 0 ] ) _technic_frictionless_axle_tooth_2d();
+			rotate( [ 0, 0, 180 ] ) mirror( [ 0, 1, 0 ] ) _technic_frictionless_axle_tooth_2d();
+		}
+	}
+}
+
+/**
+ * Optional cylindrical entry transition for a frictionless axle hole.
+ *
+ * This is not an axle stop or pin-shoulder seat: its diameter is the 6-LDU
+ * frictionless axle opening envelope itself. The owning composition chooses whether and
+ * where the transition is present. The geometry is intentionally a simple cylinder.
+ */
+module technic_frictionless_axle_entry_transition( depth = technic_frictionless_axle_entry_transition_depth() ) {
+	assert( is_num( depth ) && depth > 0, str( "invalid frictionless axle entry transition depth: ", depth ) );
+	cylinder(
+		r = technic_frictionless_axle_outer_radius(),
+		h = depth + EXTENSION_FOR_DIFFERENCE
+	);
 }
 
 /**
@@ -2174,10 +2264,12 @@ function technic_gear_double_hub_diameter( teeth, center, resolved_body_topology
 		// Pin bore centers retain the existing pin-connector outer diameter.
 		center_wall_diameter = center == "pin"
 			? technic_pin_connector_outer_diameter
-			: center == "axle" || center == "integral"
-				? technic_axle_spline_width
-					+ ( 2 * technic_pin_connector_shoulder_wall_thickness )
-				: assert( false, str( "invalid center interface: ", center ) ),
+			: center == "frictionless_axle"
+				? technic_frictionless_axle_minimum_support_diameter()
+				: center == "axle" || center == "integral"
+					? technic_axle_spline_width
+						+ ( 2 * technic_pin_connector_shoulder_wall_thickness )
+					: assert( false, str( "invalid center interface: ", center ) ),
 		envelope_diameter = resolved_body_topology == "solid"
 			? technic_gear_root_diameter( teeth )
 			: technic_gear_double_rim_inner_diameter( teeth, resolved_body_topology )
@@ -2400,7 +2492,7 @@ function technic_gear_secondary_effective_feature_resolved( teeth, requested, bo
 		: technic_gear_secondary_effective_feature( teeth, requested );
 
 /** Build one axle station with all applicability resolved before placement. */
-function technic_gear_axle_station_record( teeth, point, orientation, body_mode, resolved_body_topology, role ) =
+function technic_gear_axle_station_record( teeth, point, orientation, body_mode, resolved_body_topology, role, opening = "axle" ) =
 	let(
 		support_required = technic_gear_axle_support_required( resolved_body_topology ),
 		support_fits = technic_gear_axle_support_fits( teeth, point, orientation ),
@@ -2415,7 +2507,8 @@ function technic_gear_axle_station_record( teeth, point, orientation, body_mode,
 	[
 		point[0], point[1], orientation, emit_support, emit_relief, role,
 		support_required, support_fits, relief_fits_body, relief_clears_ring,
-		relief_outer_radius, ring_inner_radius, ring_gap, technic_gear_axle_station_minimum_clearance
+		relief_outer_radius, ring_inner_radius, ring_gap, technic_gear_axle_station_minimum_clearance,
+		opening
 	];
 
 /** One composition-time registry for center plus selected secondary axle records. */
@@ -2428,8 +2521,8 @@ function technic_gear_axle_station_records( teeth, center, secondary_feature, bo
 			: ( secondary_feature == "axle" || secondary_feature == "pin+axle" ? technic_gear_secondary_axle_stations( teeth ) : [] )
 	)
 	concat(
-		center == "axle"
-			? [ technic_gear_axle_station_record( teeth, [ 0, 0 ], 0, body_mode, resolved_body_topology, "center" ) ]
+		( center == "axle" || center == "frictionless_axle" )
+			? [ technic_gear_axle_station_record( teeth, [ 0, 0 ], 0, body_mode, resolved_body_topology, "center", center ) ]
 			: [],
 		[ for ( point = secondary_axle_points )
 			technic_gear_axle_station_record(
@@ -2454,7 +2547,11 @@ module technic_gear_place_axle_stations( records, height, operand ) {
 			}
 
 			if ( operand == "negative" ) {
-				technic_gear_axle_hole_fixed( height = height );
+				if ( station[14] == "frictionless_axle" ) {
+					technic_frictionless_axle_hole_fixed( height = height );
+				} else {
+					technic_gear_axle_hole_fixed( height = height );
+				}
 
 				if ( station[4] ) {
 					rotate( [ 0, 0, station[2] ] ) {
@@ -2590,7 +2687,7 @@ module technic_gear_axle_station_manifest( teeth, center = "axle", secondary_fea
 	echo( "TECHNIC_GEAR_EFFECTIVE_SECONDARY", effective_secondary );
 	echo( "TECHNIC_GEAR_AXLE_REGISTRY", records );
 
-	assert( len( [ for ( r = records ) if ( r[0] == 0 && r[1] == 0 ) r ] ) == ( center == "axle" ? 1 : 0 ), "combined axle registry center count mismatch" );
+	assert( len( [ for ( r = records ) if ( r[0] == 0 && r[1] == 0 ) r ] ) == ( center == "axle" || center == "frictionless_axle" ? 1 : 0 ), "combined axle registry center count mismatch" );
 	assert( len( [ for ( r = records ) if ( r[2] != 0 && r[2] != 90 ) r ] ) == 0, "combined axle registry orientation must be 0/90" );
 	assert( len( [ for ( i = [ 0 : len( records ) - 1 ] ) if ( _technic_gear_station_coordinate_seen_before( records, i ) ) i ] ) == 0, "combined axle registry contains duplicate coordinates" );
 	assert( len( [ for ( r = records ) if ( r[4] && !r[3] ) r ] ) == 0, "entry relief requires P1 support" );
@@ -2799,7 +2896,7 @@ module technic_gear_integral_center_positive(
 
 /** Radial clearance for the singular center connector against the owning body. */
 function technic_gear_center_radial_clearance_valid( center, axial_form, teeth ) =
-	center == "axle"
+	( center == "axle" || center == "frictionless_axle" )
 		? true
 		: axial_form == "double"
 			? technic_gear_classic_rim_inner_diameter( teeth ) >= technic_pin_connector_outer_diameter
@@ -3307,7 +3404,7 @@ module technic_gear(
 	assert( _technic_gear_value_in( body_mode, [ "filled", "reduced", "hollow" ] ), str( "invalid body_mode: ", body_mode ) );
 	assert( _technic_gear_value_in( reduced_pattern, [ "classic", "ring" ] ), str( "invalid reduced_pattern: ", reduced_pattern ) );
 	assert( is_undef( hollow_structure ) || _technic_gear_value_in( hollow_structure, [ "cross", "frame", "ring" ] ), str( "invalid hollow_structure: ", hollow_structure ) );
-	assert( _technic_gear_value_in( center, [ "axle", "pin" ] ), str( "invalid center: ", center ) );
+	assert( _technic_gear_value_in( center, [ "axle", "frictionless_axle", "pin" ] ), str( "invalid center: ", center ) );
 	assert( _technic_gear_value_in( secondary_feature, [ "none", "pin", "axle", "pin+axle", "clutch_single", "clutch_dual" ] ), str( "invalid secondary_feature: ", secondary_feature ) );
 	assert( _technic_gear_value_in( center_construction, [ "bore", "integral" ] ), str( "invalid center_construction: ", center_construction ) );
 	assert( _technic_gear_value_in( bottom_end, [ "none", "axle", "pin" ] ), str( "invalid bottom_end: ", bottom_end ) );
@@ -3348,6 +3445,18 @@ module technic_gear(
 	);
 	center_interface = center_construction == "integral" ? "integral" : center;
 	effective_center = center_construction == "bore" ? center : "inactive";
+	frictionless_axle_requested = center_construction == "bore" && center == "frictionless_axle";
+	frictionless_axle_family_supported = !frictionless_axle_requested || (
+		axial_form == "double"
+		&& resolved_body_topology == "solid"
+		&& effective_tooth_sections == "stepped"
+		&& secondary_feature == "none"
+	);
+	frictionless_axle_envelope_fits = !frictionless_axle_requested || (
+		max( technic_gear_double_rim_outer_diameter( teeth ), technic_gear_stepped_center_support_diameter() )
+		>= technic_frictionless_axle_minimum_support_diameter()
+	);
+	frictionless_axle_fits = frictionless_axle_family_supported && frictionless_axle_envelope_fits;
 	integral_fits = center_construction == "integral"
 		? technic_gear_integral_center_fits(
 			axial_form, teeth, effective_height, bottom_end, top_end,
@@ -3356,13 +3465,18 @@ module technic_gear(
 	clutch_requested = axial_form == "double"
 		&& ( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" );
 	clutch_fits = clutch_requested
-		? technic_gear_clutch_interface_fits( teeth, center_interface, resolved_body_topology ) : false;
+		? ( center_interface == "frictionless_axle" ? false : technic_gear_clutch_interface_fits( teeth, center_interface, resolved_body_topology ) )
+		: false;
 	effective_secondary_feature = axial_form == "double"
 		? ( clutch_requested
 			? ( clutch_fits ? secondary_feature : "none" )
 			: technic_gear_secondary_effective_feature_resolved( teeth, secondary_feature, body_mode, hollow_structure ) )
 		: "none";
-	body_root_diameter = axial_form == "double" ? technic_gear_double_rim_outer_diameter( teeth ) : 0;
+	body_root_diameter = axial_form == "double"
+		? ( resolved_body_topology == "solid" && effective_tooth_sections == "stepped"
+			? max( technic_gear_double_rim_outer_diameter( teeth ), technic_gear_stepped_center_support_diameter() )
+			: technic_gear_double_rim_outer_diameter( teeth ) )
+		: 0;
 	body_inner_diameter = axial_form == "double"
 		? ( resolved_body_topology == "reduced" && reduced_pattern == "ring"
 			? technic_gear_reduced_ring_rim_inner_diameter( teeth )
@@ -3387,7 +3501,7 @@ module technic_gear(
 	body_mode_state = axial_form == "double"
 		? ( body_mode == "hollow" ? ( hollow_valid ? "supported" : "missing" ) : "supported" )
 		: body_mode == "hollow" ? "missing" : ( body_mode == effective_body_mode ? "supported" : "fallback" );
-	center_state = center_construction == "bore" ? "supported" : "derived";
+	center_state = center_construction == "bore" ? ( frictionless_axle_fits ? "supported" : "missing" ) : "derived";
 	center_construction_state = center_construction == "integral"
 		? ( integral_fits ? "supported" : "missing" ) : "supported";
 	integral_end_state = center_construction == "integral"
@@ -3431,7 +3545,11 @@ module technic_gear(
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
 	_technic_gear_support_record(
 		"center", center, effective_center, center_state,
-		center_construction == "integral" ? "inactive-for-integral-center" : axial_form == "double" && center == "pin" ? "cross-interface-reuse" : "legacy-path",
+		center_construction == "integral"
+			? "inactive-for-integral-center"
+			: center == "frictionless_axle"
+				? ( !frictionless_axle_family_supported ? "frictionless-axle-family-combination-unsupported" : !frictionless_axle_envelope_fits ? "frictionless-axle-support-envelope-too-small" : "ldraw-axl4hole-two-toothed" )
+				: axial_form == "double" && center == "pin" ? "cross-interface-reuse" : "legacy-path",
 		debug
 	);
 	_technic_gear_support_record(
@@ -3519,21 +3637,26 @@ module technic_gear(
 		}
 
 		if ( clutch_requested ) {
-			clutch_depth = technic_gear_clutch_interface_depth( effective_height );
-			echo( str(
-				"TECHNIC_GEAR_CLUTCH|fits=", clutch_fits,
-				"|faces=", technic_gear_clutch_face_count( secondary_feature ),
-				"|depth=", clutch_depth,
-				"|outer_radius=", technic_gear_clutch_interface_radius( teeth, resolved_body_topology ),
-				"|inner_clearance=", technic_gear_clutch_inner_clearance_radius( center ),
-				"|positive_bore=", technic_gear_clutch_positive_bore_radius(),
-				"|positive_bore_gap=", technic_gear_clutch_positive_bore_gap( center ),
-				"|z=", technic_gear_clutch_face_z_positions( secondary_feature, effective_height, clutch_depth )
-			) );
+			if ( center_interface == "frictionless_axle" ) {
+				echo( "TECHNIC_GEAR_CLUTCH|fits=false|reason=frictionless-axle-clutch-unsupported" );
+			} else {
+				clutch_depth = technic_gear_clutch_interface_depth( effective_height );
+				echo( str(
+					"TECHNIC_GEAR_CLUTCH|fits=", clutch_fits,
+					"|faces=", technic_gear_clutch_face_count( secondary_feature ),
+					"|depth=", clutch_depth,
+					"|outer_radius=", technic_gear_clutch_interface_radius( teeth, resolved_body_topology ),
+					"|inner_clearance=", technic_gear_clutch_inner_clearance_radius( center ),
+					"|positive_bore=", technic_gear_clutch_positive_bore_radius(),
+					"|positive_bore_gap=", technic_gear_clutch_positive_bore_gap( center ),
+					"|z=", technic_gear_clutch_face_z_positions( secondary_feature, effective_height, clutch_depth )
+				) );
+			}
 		}
 	}
 
 	assert( technic_gear_axial_dimensions_valid( axial_form, effective_height, axial_form == "double" ? resolved_body_topology : undef ), str( "gear_height produces invalid axial dimensions: ", effective_height ) );
+	assert( frictionless_axle_fits, str( "frictionless axle centre is unsupported for this family/envelope: axial_form=", axial_form, ", teeth=", teeth, ", body_mode=", body_mode, ", tooth_sections=", effective_tooth_sections, ", secondary_feature=", secondary_feature ) );
 	assert( center_construction == "integral" || technic_gear_center_radial_clearance_valid( effective_center, axial_form, teeth ), str( "center connector lacks radial clearance: center=", effective_center, ", axial_form=", axial_form, ", teeth=", teeth ) );
 	assert(
 		center_construction != "integral" || integral_fits,
@@ -4676,10 +4799,9 @@ module technic_wheel( diameter = 1, width = 1, center_groove = true, hole_type =
  * **Part Support:**
  * - `part #4716`:  technic_worm_gear( height = 2, width = 3 );                    // 10.5mm wide, 16mm tall
  * - `part #27938`: technic_worm_gear( height = 1, width = 4 );                    // 14mm wide, 8mm tall
- * - `part #32905`: technic_worm_gear( height = 2, width = 3, opening = "axle2" ); // 10.5mm wide, 16mm tall
  * @param height *float* The height of the gear, in Technic units.
  * @param width *int* Target outside diameter in 3.5mm units. The historical values 3 and 4 therefore target 10.5mm and 14mm respectively.
- * @param opening *string* Whether the opening should be axle shaped, or the half-axle/half-circle shape that some new gears use. "axle" or "axle2"
+ * @param opening *string* Centre-opening selector. "frictionless_axle" uses the generic frictionless axle hole plus an optional one-end circular entry transition.
  */
 module technic_worm_gear( height = 2, width = 3, opening = "axle" ) {
 	include <lib/gears/gears.scad>;
@@ -4689,6 +4811,7 @@ module technic_worm_gear( height = 2, width = 3, opening = "axle" ) {
 	lead_angle_denominator = target_outer_diameter - ( 5 * technic_worm_gear_modul / 3 );
 
 	assert( height > 0, "technic_worm_gear(): height must be positive" );
+	assert( opening == "axle" || opening == "frictionless_axle", "technic_worm_gear(): opening must be axle or frictionless_axle" );
 	assert( lead_angle_denominator > technic_worm_gear_modul * technic_worm_gear_thread_starts, "technic_worm_gear(): width is too small for the configured worm geometry" );
 
 	// lib/gears/worm() has tip diameter D = m*n/sin(lead_angle) + 5*m/3.
@@ -4705,12 +4828,27 @@ module technic_worm_gear( height = 2, width = 3, opening = "axle" ) {
 			pressure_angle = technic_worm_gear_pressure_angle
 		);
 
-		// Preserve the existing opening behaviour; opening-specific repair is a separate fix.
-		technic_axle_hole( height = height );
+		if ( opening == "frictionless_axle" ) {
+			// Route to the same generic frictionless axle-hole primitive used by gears.
+			translate( [ 0, 0, worm_length / 2 ] ) {
+				technic_frictionless_axle_hole_fixed( height = worm_length );
+			}
 
-		// Remove a little indented circle around the axle at each end.
-		translate( [ 0, 0, -EXTENSION_FOR_DIFFERENCE ] ) cylinder( d = technic_pin_connector_outer_diameter, h = technic_worm_gear_end_inset + EXTENSION_FOR_DIFFERENCE );
-		translate( [ 0, 0, worm_length - technic_worm_gear_end_inset ] ) cylinder( d = technic_pin_connector_outer_diameter, h = technic_worm_gear_end_inset + EXTENSION_FOR_DIFFERENCE );
+			// The optional one-face treatment is a simple cylindrical lead-in at
+			// the frictionless-axle envelope, not a part-number compatibility claim.
+			translate( [ 0, 0, worm_length - technic_frictionless_axle_entry_transition_depth() ] ) {
+				technic_frictionless_axle_entry_transition();
+			}
+		} else {
+			// Preserve the classic axle opening and its established two end recesses exactly.
+			technic_axle_hole( height = height );
+			translate( [ 0, 0, -EXTENSION_FOR_DIFFERENCE ] ) {
+				cylinder( d = technic_pin_connector_outer_diameter, h = technic_worm_gear_end_inset + EXTENSION_FOR_DIFFERENCE );
+			}
+			translate( [ 0, 0, worm_length - technic_worm_gear_end_inset ] ) {
+				cylinder( d = technic_pin_connector_outer_diameter, h = technic_worm_gear_end_inset + EXTENSION_FOR_DIFFERENCE );
+			}
+		}
 	}
 }
 

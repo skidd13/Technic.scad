@@ -448,13 +448,13 @@ Generate a Technic-compatible worm gear.
 **Part Support:**
 - `part #4716`:  technic_worm_gear( height = 2, width = 3 );                    // 10mm wide, 16mm tall
 - `part #27938`: technic_worm_gear( height = 1, width = 4 );                    // 13.5mm wide, 8mm tall
-- `part #32905`: technic_worm_gear( height = 2, width = 3, opening = "axle2" ); // 10mm wide, 15.7mm tall
+- frictionless axle opening: technic_worm_gear( height = 2, width = 3, opening = "frictionless_axle" );
 
 **Parameters:**
 
 - `height`: *float* The height of the gear, in Technic units.
 - `width`: *int* The width of the gear, in some unknown units. The two real-world Technic worm gears seem to be roughly multiples of 3.5mm (3x and 4x), and values outside of 3-5 don't really work.
-- `opening`: *string* Whether the opening should be axle shaped, or the half-axle/half-circle shape that some new gears use. "axle" or "axle2"
+- `opening`: *string* Centre-interface selector. Supported worm openings are "axle" and "frictionless_axle".
 
 **Returns:**
 
