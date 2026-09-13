@@ -1486,6 +1486,85 @@ module technic_frictionless_axle_entry_transition( depth = technic_frictionless_
 	);
 }
 
+
+/** Shared centre-interface vocabulary used by single, double and worm gears. */
+function technic_gear_center_type_valid( center ) =
+	_technic_gear_value_in( center, [ "axle", "pin", "frictionless_axle" ] );
+
+/**
+ * Resolve one centre-interface contract.
+ *
+ * Record layout:
+ * [type, family, construction, supported, reason, entry_transition,
+ *  bottom_end, top_end, bottom_end_length, top_end_length]
+ *
+ * Family-specific topology decides `supported`; every downstream centre path
+ * consumes the resulting record instead of reinterpreting the public selector.
+ */
+function technic_gear_resolve_center_contract(
+	center,
+	family,
+	construction = "bore",
+	supported = true,
+	reason = "supported",
+	entry_transition = false,
+	bottom_end = "none",
+	top_end = "none",
+	bottom_end_length = 1,
+	top_end_length = 1
+) =
+	assert( technic_gear_center_type_valid( center ), str( "invalid center: ", center ) )
+	assert( _technic_gear_value_in( family, [ "single", "double", "worm" ] ), str( "invalid center family: ", family ) )
+	assert( _technic_gear_value_in( construction, [ "bore", "integral" ] ), str( "invalid center construction: ", construction ) )
+	assert( construction != "integral" || family != "worm", "worm integral centre is unsupported" )
+	assert( _technic_gear_value_in( bottom_end, [ "none", "axle", "pin" ] ), str( "invalid bottom end: ", bottom_end ) )
+	assert( _technic_gear_value_in( top_end, [ "none", "axle", "pin" ] ), str( "invalid top end: ", top_end ) )
+	assert( is_num( bottom_end_length ) && bottom_end_length > 0, str( "bottom_end_length must be positive: ", bottom_end_length ) )
+	assert( is_num( top_end_length ) && top_end_length > 0, str( "top_end_length must be positive: ", top_end_length ) )
+	[
+		center, family, construction, supported, reason, entry_transition,
+		bottom_end, top_end, bottom_end_length, top_end_length
+	];
+
+function technic_gear_center_contract_type( contract ) = contract[ 0 ];
+function technic_gear_center_contract_family( contract ) = contract[ 1 ];
+function technic_gear_center_contract_construction( contract ) = contract[ 2 ];
+function technic_gear_center_contract_supported( contract ) = contract[ 3 ];
+function technic_gear_center_contract_reason( contract ) = contract[ 4 ];
+function technic_gear_center_contract_entry_transition( contract ) = contract[ 5 ];
+function technic_gear_center_contract_bottom_end( contract ) = contract[ 6 ];
+function technic_gear_center_contract_top_end( contract ) = contract[ 7 ];
+function technic_gear_center_contract_bottom_end_length( contract ) = contract[ 8 ];
+function technic_gear_center_contract_top_end_length( contract ) = contract[ 9 ];
+
+/**
+ * Finished axial centre-interface face datum.
+ *
+ * Integral native axle stops and pin collars are placed from this same face.
+ * A frictionless entry transition may key from the datum without implying that
+ * its simple cylindrical profile is a stop or shoulder geometry.
+ */
+function technic_gear_center_face_datum_z( contract, body_height, face ) =
+	assert( face == "bottom" || face == "top", str( "invalid center face: ", face ) )
+	let( family = technic_gear_center_contract_family( contract ) )
+	family == "double"
+		? ( face == "bottom" ? -body_height / 2 : body_height / 2 )
+		: ( face == "bottom" ? 0 : body_height );
+
+/** Emit the resolved centre contract for validation/debug evidence. */
+module technic_gear_center_contract_manifest( contract, debug = false ) {
+	if ( debug ) {
+		echo( str(
+			"TECHNIC_GEAR_CENTER_CONTRACT|family=", technic_gear_center_contract_family( contract ),
+			"|type=", technic_gear_center_contract_type( contract ),
+			"|construction=", technic_gear_center_contract_construction( contract ),
+			"|supported=", technic_gear_center_contract_supported( contract ),
+			"|reason=", technic_gear_center_contract_reason( contract ),
+			"|entry_transition=", technic_gear_center_contract_entry_transition( contract )
+		) );
+	}
+}
+
 /**
  * WP06C secondary-station selector constants.
  *
@@ -2512,8 +2591,10 @@ function technic_gear_axle_station_record( teeth, point, orientation, body_mode,
 	];
 
 /** One composition-time registry for center plus selected secondary axle records. */
-function technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode, resolved_body_topology, hollow_structure = undef ) =
+function technic_gear_axle_station_records( teeth, center_contract, secondary_feature, body_mode, resolved_body_topology, hollow_structure = undef ) =
 	let(
+		center = technic_gear_center_contract_type( center_contract ),
+		center_is_bore = technic_gear_center_contract_construction( center_contract ) == "bore",
 		secondary_axle_points = body_mode == "hollow" && hollow_structure == "cross"
 			? technic_gear_hollow_cross_axle_points( teeth, secondary_feature )
 			: body_mode == "hollow" && hollow_structure == "frame"
@@ -2521,7 +2602,7 @@ function technic_gear_axle_station_records( teeth, center, secondary_feature, bo
 			: ( secondary_feature == "axle" || secondary_feature == "pin+axle" ? technic_gear_secondary_axle_stations( teeth ) : [] )
 	)
 	concat(
-		( center == "axle" || center == "frictionless_axle" )
+		( center_is_bore && ( center == "axle" || center == "frictionless_axle" ) )
 			? [ technic_gear_axle_station_record( teeth, [ 0, 0 ], 0, body_mode, resolved_body_topology, "center", center ) ]
 			: [],
 		[ for ( point = secondary_axle_points )
@@ -2681,13 +2762,17 @@ function _technic_gear_station_coordinate_seen_before( records, index, prior = 0
 module technic_gear_axle_station_manifest( teeth, center = "axle", secondary_feature = "pin+axle", body_mode = "reduced" ) {
 	effective_secondary = technic_gear_secondary_effective_feature( teeth, secondary_feature );
 	resolved_body_topology = technic_gear_double_body_topology( teeth, body_mode );
-	records = technic_gear_axle_station_records( teeth, center, effective_secondary, body_mode, resolved_body_topology );
+	center_contract = technic_gear_resolve_center_contract(
+		center = center, family = "double", construction = "bore",
+		supported = true, reason = "station-manifest"
+	);
+	records = technic_gear_axle_station_records( teeth, center_contract, effective_secondary, body_mode, resolved_body_topology );
 
 	echo( "TECHNIC_GEAR_AXLE_TOPOLOGY", resolved_body_topology );
 	echo( "TECHNIC_GEAR_EFFECTIVE_SECONDARY", effective_secondary );
 	echo( "TECHNIC_GEAR_AXLE_REGISTRY", records );
 
-	assert( len( [ for ( r = records ) if ( r[0] == 0 && r[1] == 0 ) r ] ) == ( center == "axle" || center == "frictionless_axle" ? 1 : 0 ), "combined axle registry center count mismatch" );
+	assert( len( [ for ( r = records ) if ( r[0] == 0 && r[1] == 0 ) r ] ) == ( technic_gear_center_contract_type( center_contract ) == "axle" || technic_gear_center_contract_type( center_contract ) == "frictionless_axle" ? 1 : 0 ), "combined axle registry center count mismatch" );
 	assert( len( [ for ( r = records ) if ( r[2] != 0 && r[2] != 90 ) r ] ) == 0, "combined axle registry orientation must be 0/90" );
 	assert( len( [ for ( i = [ 0 : len( records ) - 1 ] ) if ( _technic_gear_station_coordinate_seen_before( records, i ) ) i ] ) == 0, "combined axle registry contains duplicate coordinates" );
 	assert( len( [ for ( r = records ) if ( r[4] && !r[3] ) r ] ) == 0, "entry relief requires P1 support" );
@@ -2696,49 +2781,75 @@ module technic_gear_axle_station_manifest( teeth, center = "axle", secondary_fea
 
 
 /**
- * Positive material for the singular center connector.
+ * Shared singular-centre placement/geometry dispatcher.
  *
- * This module owns connector-local reinforcement only; the owning body remains
- * outside. Pin wall/shoulder geometry reuses the existing connector primitive.
+ * Double axle/frictionless support and cuts are owned by the station registry,
+ * so this dispatcher handles the double pin pair only. Single and worm paths
+ * retain their accepted family-specific axial datums while consuming the same
+ * resolved centre contract.
  */
-module technic_gear_center_positive(
-	center,
-	axial_form,
-	reinforcement_height,
-	axle_reinforcement = false
+module technic_gear_place_center_interface(
+	center_contract,
+	body_height,
+	operand,
+	single_lip_height = 0
 ) {
-	if ( center == "axle" ) {
-		if ( axle_reinforcement ) {
-			cube(
-				size = [
-					technic_gear_axle_reinforcement_width,
-					technic_gear_axle_reinforcement_height,
-					reinforcement_height
-				],
-				center = true
-			);
-		}
-	} else if ( center == "pin" ) {
-		translate( [ 0, 0, -reinforcement_height / 2 ] ) {
-			technic_pin_connector( length = reinforcement_height / technic_height_in_mm );
-		}
-	}
-}
+	assert( operand == "positive" || operand == "negative", str( "invalid center operand: ", operand ) );
+	assert( technic_gear_center_contract_supported( center_contract ),
+		str( "unsupported center contract: ", technic_gear_center_contract_reason( center_contract ) ) );
 
-/** Generate only the negative geometry for the singular center connector. */
-module technic_gear_center_negative( center, height, wide_axle = false, pin_clearance_diameter = technic_pin_connector_outer_diameter - ( EXTENSION_FOR_DIFFERENCE / 4 ) ) {
-	if ( center == "axle" ) {
-		if ( wide_axle ) {
-			technic_gear_wide_axle_hole( height = height, center_of_multiple = true );
-		} else {
-			technic_axle_hole( height = height );
+	center = technic_gear_center_contract_type( center_contract );
+	family = technic_gear_center_contract_family( center_contract );
+	construction = technic_gear_center_contract_construction( center_contract );
+
+	if ( construction == "bore" ) {
+		if ( family == "double" ) {
+			if ( center == "pin" ) {
+				technic_gear_place_center_pin(
+					height = body_height,
+					shoulder = true,
+					operand = operand
+				);
+			}
+		} else if ( family == "single" ) {
+			if ( center == "axle" && operand == "negative" ) {
+				// Preserve the accepted single-form axle cutter and its native datum.
+				technic_axle_hole( height = 1 );
+			} else if ( center == "pin" ) {
+				translate( [ 0, 0, single_lip_height + technic_height_in_mm / 2 ] ) {
+					technic_gear_place_center_pin(
+						height = technic_height_in_mm,
+						shoulder = true,
+						operand = operand
+					);
+				}
+			}
+		} else if ( family == "worm" && operand == "negative" ) {
+			if ( center == "axle" ) {
+				// Preserve the classic axle cutter and both established face recesses.
+				technic_axle_hole( height = body_height / stud_spacing );
+				translate( [ 0, 0, -EXTENSION_FOR_DIFFERENCE ] ) {
+					cylinder( d = technic_pin_connector_outer_diameter, h = technic_worm_gear_end_inset + EXTENSION_FOR_DIFFERENCE );
+				}
+				translate( [ 0, 0, body_height - technic_worm_gear_end_inset ] ) {
+					cylinder( d = technic_pin_connector_outer_diameter, h = technic_worm_gear_end_inset + EXTENSION_FOR_DIFFERENCE );
+				}
+			} else if ( center == "frictionless_axle" ) {
+				translate( [ 0, 0, body_height / 2 ] ) {
+					technic_frictionless_axle_hole_fixed( height = body_height );
+				}
+
+				if ( technic_gear_center_contract_entry_transition( center_contract ) ) {
+					transition_depth = technic_frictionless_axle_entry_transition_depth();
+					translate( [
+						0, 0,
+						technic_gear_center_face_datum_z( center_contract, body_height, "top" ) - transition_depth
+					] ) {
+						technic_frictionless_axle_entry_transition( depth = transition_depth );
+					}
+				}
+			}
 		}
-	} else if ( center == "pin" ) {
-		cylinder(
-			d = pin_clearance_diameter,
-			h = height + EXTENSION_FOR_DIFFERENCE,
-			center = true
-		);
 	}
 }
 
@@ -2836,8 +2947,15 @@ module technic_gear_integral_axle_end_positive( end_length ) {
 
 /** Full solid centre plus independent face-attached axle/pin ends. */
 module technic_gear_integral_center_positive(
-	axial_form, teeth, gear_height, bottom_end, top_end, bottom_end_length, top_end_length
+	center_contract, axial_form, teeth, gear_height
 ) {
+	assert( technic_gear_center_contract_construction( center_contract ) == "integral", "integral center requires integral center contract" );
+	assert( technic_gear_center_contract_supported( center_contract ),
+		str( "unsupported integral center contract: ", technic_gear_center_contract_reason( center_contract ) ) );
+	bottom_end = technic_gear_center_contract_bottom_end( center_contract );
+	top_end = technic_gear_center_contract_top_end( center_contract );
+	bottom_end_length = technic_gear_center_contract_bottom_end_length( center_contract );
+	top_end_length = technic_gear_center_contract_top_end_length( center_contract );
 	required_root_diameter = max(
 		technic_gear_integral_end_drive_diameter( bottom_end ),
 		technic_gear_integral_end_drive_diameter( top_end )
@@ -2848,8 +2966,8 @@ module technic_gear_integral_center_positive(
 		required_root_diameter,
 		technic_gear_integral_available_root_diameter( axial_form, teeth )
 	);
-	bottom_face_z = axial_form == "double" ? -gear_height / 2 : 0;
-	top_face_z = axial_form == "double" ? gear_height / 2 : gear_height;
+	bottom_face_z = technic_gear_center_face_datum_z( center_contract, gear_height, "bottom" );
+	top_face_z = technic_gear_center_face_datum_z( center_contract, gear_height, "top" );
 
 	// The centre is solid gear material. Positive connectors terminate at the
 	// finished gear faces and attach through their flat shoulder/collar regions;
@@ -2895,12 +3013,14 @@ module technic_gear_integral_center_positive(
 }
 
 /** Radial clearance for the singular center connector against the owning body. */
-function technic_gear_center_radial_clearance_valid( center, axial_form, teeth ) =
-	( center == "axle" || center == "frictionless_axle" )
+function technic_gear_center_radial_clearance_valid( center_contract, axial_form, teeth ) =
+	technic_gear_center_contract_construction( center_contract ) == "integral"
 		? true
-		: axial_form == "double"
-			? technic_gear_classic_rim_inner_diameter( teeth ) >= technic_pin_connector_outer_diameter
-			: true;
+		: ( technic_gear_center_contract_type( center_contract ) == "axle" || technic_gear_center_contract_type( center_contract ) == "frictionless_axle" )
+			? true
+			: axial_form == "double"
+				? technic_gear_classic_rim_inner_diameter( teeth ) >= technic_pin_connector_outer_diameter
+				: true;
 
 /**
  * Return the single-form backing-plate / body-side tooth-tip diameter.
@@ -3404,7 +3524,7 @@ module technic_gear(
 	assert( _technic_gear_value_in( body_mode, [ "filled", "reduced", "hollow" ] ), str( "invalid body_mode: ", body_mode ) );
 	assert( _technic_gear_value_in( reduced_pattern, [ "classic", "ring" ] ), str( "invalid reduced_pattern: ", reduced_pattern ) );
 	assert( is_undef( hollow_structure ) || _technic_gear_value_in( hollow_structure, [ "cross", "frame", "ring" ] ), str( "invalid hollow_structure: ", hollow_structure ) );
-	assert( _technic_gear_value_in( center, [ "axle", "frictionless_axle", "pin" ] ), str( "invalid center: ", center ) );
+	assert( technic_gear_center_type_valid( center ), str( "invalid center: ", center ) );
 	assert( _technic_gear_value_in( secondary_feature, [ "none", "pin", "axle", "pin+axle", "clutch_single", "clutch_dual" ] ), str( "invalid secondary_feature: ", secondary_feature ) );
 	assert( _technic_gear_value_in( center_construction, [ "bore", "integral" ] ), str( "invalid center_construction: ", center_construction ) );
 	assert( _technic_gear_value_in( bottom_end, [ "none", "axle", "pin" ] ), str( "invalid bottom_end: ", bottom_end ) );
@@ -3443,8 +3563,6 @@ module technic_gear(
 	tooth_section_records = technic_gear_tooth_section_records(
 		teeth, effective_height, effective_tooth_sections, resolved_body_topology
 	);
-	center_interface = center_construction == "integral" ? "integral" : center;
-	effective_center = center_construction == "bore" ? center : "inactive";
 	frictionless_axle_requested = center_construction == "bore" && center == "frictionless_axle";
 	frictionless_axle_family_supported = !frictionless_axle_requested || (
 		axial_form == "double"
@@ -3462,6 +3580,21 @@ module technic_gear(
 			axial_form, teeth, effective_height, bottom_end, top_end,
 			bottom_end_length, top_end_length
 		) : true;
+	center_family = axial_form == "double" ? "double" : "single";
+	center_supported = center_construction == "integral" ? integral_fits : frictionless_axle_fits;
+	center_reason = center_construction == "integral"
+		? ( integral_fits ? "integral-center-valid" : "integral-internal-diameter-or-drive-clearance-invalid" )
+		: center == "frictionless_axle"
+			? ( !frictionless_axle_family_supported ? "frictionless-axle-family-combination-unsupported" : !frictionless_axle_envelope_fits ? "frictionless-axle-support-envelope-too-small" : "frictionless-axle-reference-profile" )
+			: "supported-center-interface";
+	center_contract = technic_gear_resolve_center_contract(
+		center = center, family = center_family, construction = center_construction,
+		supported = center_supported, reason = center_reason, entry_transition = false,
+		bottom_end = bottom_end, top_end = top_end,
+		bottom_end_length = bottom_end_length, top_end_length = top_end_length
+	);
+	center_interface = center_construction == "integral" ? "integral" : technic_gear_center_contract_type( center_contract );
+	effective_center = center_construction == "bore" ? technic_gear_center_contract_type( center_contract ) : "inactive";
 	clutch_requested = axial_form == "double"
 		&& ( secondary_feature == "clutch_single" || secondary_feature == "clutch_dual" );
 	clutch_fits = clutch_requested
@@ -3501,7 +3634,7 @@ module technic_gear(
 	body_mode_state = axial_form == "double"
 		? ( body_mode == "hollow" ? ( hollow_valid ? "supported" : "missing" ) : "supported" )
 		: body_mode == "hollow" ? "missing" : ( body_mode == effective_body_mode ? "supported" : "fallback" );
-	center_state = center_construction == "bore" ? ( frictionless_axle_fits ? "supported" : "missing" ) : "derived";
+	center_state = center_construction == "bore" ? ( technic_gear_center_contract_supported( center_contract ) ? "supported" : "missing" ) : "derived";
 	center_construction_state = center_construction == "integral"
 		? ( integral_fits ? "supported" : "missing" ) : "supported";
 	integral_end_state = center_construction == "integral"
@@ -3545,13 +3678,10 @@ module technic_gear(
 	_technic_gear_support_record( "hollow_structure", hollow_structure, hollow_effective, hollow_state, hollow_reason, debug );
 	_technic_gear_support_record(
 		"center", center, effective_center, center_state,
-		center_construction == "integral"
-			? "inactive-for-integral-center"
-			: center == "frictionless_axle"
-				? ( !frictionless_axle_family_supported ? "frictionless-axle-family-combination-unsupported" : !frictionless_axle_envelope_fits ? "frictionless-axle-support-envelope-too-small" : "ldraw-axl4hole-two-toothed" )
-				: axial_form == "double" && center == "pin" ? "cross-interface-reuse" : "legacy-path",
+		center_construction == "integral" ? "inactive-for-integral-center" : technic_gear_center_contract_reason( center_contract ),
 		debug
 	);
+	technic_gear_center_contract_manifest( center_contract, debug = debug );
 	_technic_gear_support_record(
 		"center_construction", center_construction, center_construction, center_construction_state,
 		center_construction == "integral"
@@ -3656,23 +3786,16 @@ module technic_gear(
 	}
 
 	assert( technic_gear_axial_dimensions_valid( axial_form, effective_height, axial_form == "double" ? resolved_body_topology : undef ), str( "gear_height produces invalid axial dimensions: ", effective_height ) );
-	assert( frictionless_axle_fits, str( "frictionless axle centre is unsupported for this family/envelope: axial_form=", axial_form, ", teeth=", teeth, ", body_mode=", body_mode, ", tooth_sections=", effective_tooth_sections, ", secondary_feature=", secondary_feature ) );
-	assert( center_construction == "integral" || technic_gear_center_radial_clearance_valid( effective_center, axial_form, teeth ), str( "center connector lacks radial clearance: center=", effective_center, ", axial_form=", axial_form, ", teeth=", teeth ) );
-	assert(
-		center_construction != "integral" || integral_fits,
-		str(
-			"integral center does not fit the requested gear: axial_form=", axial_form,
-			", teeth=", teeth, ", bottom_end=", bottom_end, ", top_end=", top_end
-		)
-	);
+	assert( technic_gear_center_contract_supported( center_contract ), str( "center interface unsupported: ", technic_gear_center_contract_reason( center_contract ) ) );
+	assert( technic_gear_center_radial_clearance_valid( center_contract, axial_form, teeth ), str( "center connector lacks radial clearance: center=", effective_center, ", axial_form=", axial_form, ", teeth=", teeth ) );
 
-	if ( integral_fits ) {
+	if ( technic_gear_center_contract_supported( center_contract ) ) {
 	if ( axial_form == "double" ) {
 		// A valid-but-unimplemented clutch request must remain visibly missing.
 		// Do not substitute either an unclutched double gear or the single-form path.
 		if ( !( clutch_requested && !clutch_fits ) ) {
 			_technic_gear_double_sided_legacy(
-				teeth = teeth, gear_height = effective_height, center = center_interface,
+				teeth = teeth, gear_height = effective_height, center_contract = center_contract,
 				body_mode = effective_body_mode, reduced_pattern = reduced_pattern, secondary_feature = effective_secondary_feature,
 				resolved_body_topology = resolved_body_topology,
 				resolved_tooth_height = resolved_tooth_height,
@@ -3687,7 +3810,7 @@ module technic_gear(
 		}
 	} else {
 		_technic_gear_single_assembly(
-			teeth = teeth, bevel = effective_bevel == "single", center_hole = center_interface,
+			teeth = teeth, bevel = effective_bevel == "single", center_contract = center_contract,
 			gear_height = effective_height, body_mode = effective_body_mode,
 			bottom_end = bottom_end, top_end = top_end,
 			bottom_end_length = bottom_end_length, top_end_length = top_end_length
@@ -4107,7 +4230,7 @@ module technic_gear_double_bevel_cutter(
 module _technic_gear_double_sided_legacy(
 	teeth = 24,
 	gear_height = technic_gear_normal_height( "double" ),
-	center = "axle",
+	center_contract = technic_gear_resolve_center_contract( "axle", "double" ),
 	body_mode = "reduced",
 	reduced_pattern = "classic",
 	secondary_feature = "pin+axle",
@@ -4130,6 +4253,8 @@ module _technic_gear_double_sided_legacy(
 ) {
 	include <lib/gears/gears.scad>;
 
+	center = technic_gear_center_contract_construction( center_contract ) == "integral"
+		? "integral" : technic_gear_center_contract_type( center_contract );
 	desired_gear_axle_reinforcement_thickness = gear_height;
 	desired_pin_wall_thickness = technic_gear_double_secondary_wall_height( gear_height );
 	// A reduced body needs only the historical local boss-height bore because
@@ -4143,7 +4268,7 @@ module _technic_gear_double_sided_legacy(
 	// Resolve the combined station registry once. Both boolean operands consume
 	// this exact value so center and secondary geometry cannot drift.
 	station_body_topology = resolved_body_topology == "reduced" && reduced_pattern == "ring" ? "solid" : resolved_body_topology;
-	axle_records = technic_gear_axle_station_records( teeth, center, secondary_feature, body_mode, station_body_topology, hollow_structure );
+	axle_records = technic_gear_axle_station_records( teeth, center_contract, secondary_feature, body_mode, station_body_topology, hollow_structure );
 
 
 	// WP13F: finish all inner/body Boolean work before the outer ring and teeth.
@@ -4182,15 +4307,12 @@ module _technic_gear_double_sided_legacy(
 					operand = "positive"
 				);
 
-				// WP13H: the raw double pin-center wall belongs to the principal
-				// inner positive assembly; its paired functional bore is cut below.
-				if ( center == "pin" ) {
-					technic_gear_place_center_pin(
-						height = desired_gear_axle_reinforcement_thickness,
-						shoulder = true,
-						operand = "positive"
-					);
-				}
+				// The resolved centre contract owns the singular positive interface.
+				technic_gear_place_center_interface(
+					center_contract = center_contract,
+					body_height = desired_gear_axle_reinforcement_thickness,
+					operand = "positive"
+				);
 			}
 
 			technic_gear_secondary_pins_negative(
@@ -4204,13 +4326,11 @@ module _technic_gear_double_sided_legacy(
 				operand = "negative"
 			);
 
-			if ( center == "pin" ) {
-				technic_gear_place_center_pin(
-					height = desired_gear_axle_reinforcement_thickness,
-					shoulder = true,
-					operand = "negative"
-				);
-			}
+			technic_gear_place_center_interface(
+				center_contract = center_contract,
+				body_height = desired_gear_axle_reinforcement_thickness,
+				operand = "negative"
+			);
 
 			// 4019 keeps the canonical reduced P1 center support/relief alignment.
 			// Its four cardinal circular openings reshape that shared support instead
@@ -4282,11 +4402,10 @@ module _technic_gear_double_sided_legacy(
 			);
 		}
 
-		if ( center == "integral" ) {
+		if ( technic_gear_center_contract_construction( center_contract ) == "integral" ) {
 			technic_gear_integral_center_positive(
-				axial_form = "double", teeth = teeth, gear_height = gear_height,
-				bottom_end = bottom_end, top_end = top_end,
-				bottom_end_length = bottom_end_length, top_end_length = top_end_length
+				center_contract = center_contract,
+				axial_form = "double", teeth = teeth, gear_height = gear_height
 			);
 		}
 	}
@@ -4317,20 +4436,18 @@ module technic_gear_single_sided( teeth = 12, bevel = true, center_hole = "axle"
 }
 
 module _technic_gear_single_assembly(
-	teeth = 12, bevel = true, center_hole = "axle",
+	teeth = 12, bevel = true, center_contract = technic_gear_resolve_center_contract( "axle", "single" ),
 	gear_height = technic_gear_normal_height( "single" ), body_mode = "filled",
 	bottom_end = "none", top_end = "none",
 	bottom_end_length = 1, top_end_length = 1
 ) {
+	center_hole = technic_gear_center_contract_construction( center_contract ) == "integral"
+		? "integral" : technic_gear_center_contract_type( center_contract );
 	lip_height = technic_gear_single_lip_height( gear_height );
 	base_height = technic_gear_single_base_height( gear_height );
 	tooth_height = technic_gear_single_tooth_height( gear_height );
 	gear_diameter = technic_gear_single_body_diameter( teeth );
 	hub_diameter = technic_gear_single_hub_diameter( teeth, center_hole );
-	center_pin_height = technic_height_in_mm;
-	center_pin_shoulder = true;
-	center_pin_z = lip_height + center_pin_height / 2;
-
 	union() {
 	difference() {
 		union() {
@@ -4371,36 +4488,26 @@ module _technic_gear_single_assembly(
 				}
 			}
 
-			if ( center_hole == "pin" ) {
-				translate( [ 0, 0, center_pin_z ] ) {
-					technic_gear_place_center_pin(
-						height = center_pin_height,
-						shoulder = center_pin_shoulder,
-						operand = "positive"
-					);
-				}
-			}
+			technic_gear_place_center_interface(
+				center_contract = center_contract,
+				body_height = gear_height,
+				operand = "positive",
+				single_lip_height = lip_height
+			);
 		}
 
-		if ( center_hole == "axle" ) {
-			// Single-form axle center stays on the general compatible axle primitive.
-			technic_axle_hole( height = 1 );
-		} else if ( center_hole == "pin" ) {
-			translate( [ 0, 0, center_pin_z ] ) {
-				technic_gear_place_center_pin(
-					height = center_pin_height,
-					shoulder = center_pin_shoulder,
-					operand = "negative"
-				);
-			}
-		}
+		technic_gear_place_center_interface(
+			center_contract = center_contract,
+			body_height = gear_height,
+			operand = "negative",
+			single_lip_height = lip_height
+		);
 	}
 
-	if ( center_hole == "integral" ) {
+	if ( technic_gear_center_contract_construction( center_contract ) == "integral" ) {
 		technic_gear_integral_center_positive(
-			axial_form = "single", teeth = teeth, gear_height = gear_height,
-			bottom_end = bottom_end, top_end = top_end,
-			bottom_end_length = bottom_end_length, top_end_length = top_end_length
+			center_contract = center_contract,
+			axial_form = "single", teeth = teeth, gear_height = gear_height
 		);
 	}
 	}
@@ -4801,9 +4908,10 @@ module technic_wheel( diameter = 1, width = 1, center_groove = true, hole_type =
  * - `part #27938`: technic_worm_gear( height = 1, width = 4 );                    // 14mm wide, 8mm tall
  * @param height *float* The height of the gear, in Technic units.
  * @param width *int* Target outside diameter in 3.5mm units. The historical values 3 and 4 therefore target 10.5mm and 14mm respectively.
- * @param opening *string* Centre-opening selector. "frictionless_axle" uses the generic frictionless axle hole plus an optional one-end circular entry transition.
+ * @param opening *string* Centre-interface selector. Recognised values are "axle", "pin" and "frictionless_axle"; pin is currently rejected for the worm family.
+ * @param debug *bool* Emit the resolved centre-interface contract.
  */
-module technic_worm_gear( height = 2, width = 3, opening = "axle" ) {
+module technic_worm_gear( height = 2, width = 3, opening = "axle", debug = false ) {
 	include <lib/gears/gears.scad>;
 
 	worm_length = stud_spacing * height;
@@ -4811,8 +4919,17 @@ module technic_worm_gear( height = 2, width = 3, opening = "axle" ) {
 	lead_angle_denominator = target_outer_diameter - ( 5 * technic_worm_gear_modul / 3 );
 
 	assert( height > 0, "technic_worm_gear(): height must be positive" );
-	assert( opening == "axle" || opening == "frictionless_axle", "technic_worm_gear(): opening must be axle or frictionless_axle" );
+	assert( technic_gear_center_type_valid( opening ), str( "technic_worm_gear(): invalid opening: ", opening ) );
+	center_contract = technic_gear_resolve_center_contract(
+		center = opening, family = "worm", construction = "bore",
+		supported = opening == "axle" || opening == "frictionless_axle",
+		reason = opening == "pin" ? "worm-pin-center-unsupported" : "worm-center-interface-supported",
+		entry_transition = opening == "frictionless_axle"
+	);
+	assert( technic_gear_center_contract_supported( center_contract ),
+		str( "technic_worm_gear(): unsupported center interface: ", technic_gear_center_contract_reason( center_contract ) ) );
 	assert( lead_angle_denominator > technic_worm_gear_modul * technic_worm_gear_thread_starts, "technic_worm_gear(): width is too small for the configured worm geometry" );
+	technic_gear_center_contract_manifest( center_contract, debug = debug );
 
 	// lib/gears/worm() has tip diameter D = m*n/sin(lead_angle) + 5*m/3.
 	// Solve that relation directly so width retains its historical 3.5 mm outside-diameter units.
@@ -4828,27 +4945,11 @@ module technic_worm_gear( height = 2, width = 3, opening = "axle" ) {
 			pressure_angle = technic_worm_gear_pressure_angle
 		);
 
-		if ( opening == "frictionless_axle" ) {
-			// Route to the same generic frictionless axle-hole primitive used by gears.
-			translate( [ 0, 0, worm_length / 2 ] ) {
-				technic_frictionless_axle_hole_fixed( height = worm_length );
-			}
-
-			// The optional one-face treatment is a simple cylindrical lead-in at
-			// the frictionless-axle envelope, not a part-number compatibility claim.
-			translate( [ 0, 0, worm_length - technic_frictionless_axle_entry_transition_depth() ] ) {
-				technic_frictionless_axle_entry_transition();
-			}
-		} else {
-			// Preserve the classic axle opening and its established two end recesses exactly.
-			technic_axle_hole( height = height );
-			translate( [ 0, 0, -EXTENSION_FOR_DIFFERENCE ] ) {
-				cylinder( d = technic_pin_connector_outer_diameter, h = technic_worm_gear_end_inset + EXTENSION_FOR_DIFFERENCE );
-			}
-			translate( [ 0, 0, worm_length - technic_worm_gear_end_inset ] ) {
-				cylinder( d = technic_pin_connector_outer_diameter, h = technic_worm_gear_end_inset + EXTENSION_FOR_DIFFERENCE );
-			}
-		}
+		technic_gear_place_center_interface(
+			center_contract = center_contract,
+			body_height = worm_length,
+			operand = "negative"
+		);
 	}
 }
 
